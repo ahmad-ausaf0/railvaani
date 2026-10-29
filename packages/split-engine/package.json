@@ -1,0 +1,14 @@
+{
+  "name": "@railvaani/split-engine",
+  "version": "0.1.0",
+  "private": true,
+  "main": "src/index.ts",
+  "scripts": {
+    "test": "jasmine"
+  },
+  "devDependencies": {
+    "@types/jasmine": "^5.1.0",
+    "jasmine": "^5.5.0",
+    "typescript": "~5.8.0"
+  }
+}

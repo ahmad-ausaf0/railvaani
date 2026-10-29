@@ -1,0 +1,58 @@
+/* RailVaani design tokens + accessibility baselines. Full theme lands in Milestone 4. */
+:root {
+  --rv-font-size: 18px;
+  --rv-color-bg: #ffffff;
+  --rv-color-text: #1a1a1a;
+  --rv-color-primary: #0b3d91;
+  --rv-color-primary-text: #0b3d91;
+  --rv-color-ok: #1a7a1a;
+  --rv-color-warn: #9a4a00;
+  --rv-color-danger: #a11212;
+  --rv-focus-outline: 3px solid #b35c00;
+}
+
+html { font-size: var(--rv-font-size); }
+
+body {
+  margin: 0;
+  font-family: system-ui, 'Noto Sans', 'Noto Sans Devanagari', sans-serif;
+  color: var(--rv-color-text);
+  background: var(--rv-color-bg);
+  line-height: 1.5;
+}
+
+/* Visible focus for every interactive element: 3px, at least 3:1 against the page. */
+:focus-visible {
+  outline: var(--rv-focus-outline);
+  outline-offset: 2px;
+}
+
+/* Touch targets at least 48px with spacing (WCAG 2.5.8). */
+button, a, input, select, [role='button'] {
+  min-height: 48px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* High-contrast mode: 7:1 text minimum. */
+@media (prefers-contrast: more) {
+  :root {
+    --rv-color-bg: #000000;
+    --rv-color-text: #ffffff;
+    --rv-color-primary-text: #ffd23f;
+    --rv-focus-outline: 4px solid #ffd23f;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --rv-color-bg: #101418;
+    --rv-color-text: #f2f2f2;
+    --rv-color-primary-text: #9ec3ff;
+  }
+}
