@@ -3,7 +3,10 @@
   "compilerOptions": {
     "outDir": "../../dist/out-tsc",
     "lib": ["ES2022", "dom"],
-    "types": []
+    "types": [],
+    "paths": {
+      "@railvaani/train-core": ["../../packages/train-core/src/index.ts"]
+    }
   },
   "angularCompilerOptions": {
     "strictTemplates": true,
