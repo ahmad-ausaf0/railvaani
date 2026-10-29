@@ -3,8 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "ng": "ng",
     "start": "ng serve",
-    "build": "ng build"
+    "build": "ng build",
+    "watch": "ng build --watch --configuration development",
+    "test": "ng test"
   },
   "dependencies": {
     "@angular/animations": "^20.0.0",
@@ -23,8 +26,8 @@
     "zone.js": "~0.15.0"
   },
   "devDependencies": {
-    "@angular/build": "^20.0.0",
-    "@angular/cli": "^20.0.0",
+    "@angular/build": "20.3.34",
+    "@angular/cli": "20.3.34",
     "@angular/compiler-cli": "^20.0.0",
     "jasmine-core": "~5.5.0",
     "karma": "~6.4.0",
