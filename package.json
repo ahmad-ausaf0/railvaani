@@ -10,9 +10,10 @@
   "scripts": {
     "web": "npm run start -w @railvaani/web",
     "api": "npm run dev -w @railvaani/api",
-    "build": "npm run build -w @railvaani/web",
-    "test:engine": "npm test -w @railvaani/split-engine",
-    "e2e": "npm run e2e -w @railvaani/e2e"
+    "build": "npm run build -w @railvaani/train-core && npm run build -w @railvaani/split-engine && npm run build -w @railvaani/web",
+    "test:engine": "npm run build -w @railvaani/train-core && npm test -w @railvaani/split-engine",
+    "e2e": "npm run e2e -w @railvaani/e2e",
+    "build:pages": "npm run build -w @railvaani/train-core && npm run build -w @railvaani/split-engine && npm run build -w @railvaani/web -- --configuration production --base-href=/railvaani/"
   },
   "devDependencies": {
     "@angular/build": "^20.3.42"

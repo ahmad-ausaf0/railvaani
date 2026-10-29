@@ -2,16 +2,20 @@
   "extends": "../../tsconfig.json",
   "compilerOptions": {
     "outDir": "../../dist/out-tsc",
-    "lib": ["ES2022", "dom"],
-    "types": [],
-    "paths": {
-      "@railvaani/train-core": ["../../packages/train-core/src/index.ts"]
-    }
+    "lib": [
+      "ES2022",
+      "dom"
+    ],
+    "types": []
   },
   "angularCompilerOptions": {
     "strictTemplates": true,
     "strictInjectionParameters": true
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["src/**/*.spec.ts"]
+  "include": [
+    "src/**/*.ts"
+  ],
+  "exclude": [
+    "src/**/*.spec.ts"
+  ]
 }

@@ -35,7 +35,14 @@
                   "maximumError": "250kB"
                 }
               ],
-              "outputHashing": "all"
+              "outputHashing": "all",
+              "optimization": true,
+              "extractLicenses": true,
+              "sourceMap": false,
+              "define": {
+                "ngDevMode": "false",
+                "ngServerMode": "false"
+              }
             },
             "development": {
               "optimization": false,
