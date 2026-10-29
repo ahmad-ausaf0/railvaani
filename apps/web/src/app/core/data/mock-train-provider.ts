@@ -42,9 +42,9 @@ export function fmtTime(totalMins: number): string {
   return `${String(h).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 }
 
-/** Minutes since the train's origin departure (base shifts the origin dep to 0). */
-function absMins(stop: SeedStop, field: 'arr' | 'dep', base: number): number {
-  return stop.day * 1440 + toMins(stop[field]) - base;
+/** Absolute minutes: day offset x 1440 + clock minutes, day 0 = stored departure day. */
+function absOf(stop: SeedStop, field: 'arr' | 'dep'): number {
+  return stop.day * 1440 + toMins(stop[field]);
 }
 
 export function weekdayOfDate(date: string): Weekday {
@@ -57,10 +57,6 @@ export function weekdayOfDate(date: string): Weekday {
   }
   const dow = parsed.getUTCDay();
   return (dow === 0 ? 7 : dow) as Weekday;
-}
-
-function shiftWeekdays(runsOn: Weekday[], shiftDays: number): Weekday[] {
-  return runsOn.map((d) => ((((d - 1 + shiftDays) % 7) + 7) % 7 + 1) as Weekday);
 }
 
 function fnv1a(str: string): number {
@@ -133,8 +129,8 @@ export interface OrientedLeg {
 
 /**
  * Times and distance for one train between two of its stations, in either direction.
- * Reversed schedules are derived by mirroring the timeline (revDep = T - origArr,
- * revArr = T - origDep), so both directions always yield valid, increasing times.
+ * Reversed schedules are derived by mirroring the timeline (revDep = C - origArr,
+ * revArr = C - origDep), so both directions always yield valid, increasing times.
  * The split engine reuses this in Milestone 2.
  */
 export function orientedLeg(seed: SeedTrain, from: string, to: string): OrientedLeg | null {
@@ -147,18 +143,33 @@ export function orientedLeg(seed: SeedTrain, from: string, to: string): Oriented
   const last = seed.stops[seed.stops.length - 1];
   if (!a || !b || !first || !last) return null;
   const reversed = idxA > idxB;
-  const base = toMins(first.dep);
-  const totalMins = absMins(last, 'arr', base);
-  const depAbs = reversed ? totalMins - absMins(a, 'arr', base) : absMins(a, 'dep', base);
-  const arrAbs = reversed ? totalMins - absMins(b, 'dep', base) : absMins(b, 'arr', base);
-  if (arrAbs <= depAbs) return null;
+  const distanceKm = Math.abs(b.km - a.km);
+  if (!reversed) {
+    const durationMins = absOf(b, 'arr') - absOf(a, 'dep');
+    if (durationMins <= 0) return null;
+    const depTime = a.dep;
+    return {
+      depTime,
+      arrTime: b.arr,
+      dayOffset: Math.floor((toMins(depTime) + durationMins) / 1440),
+      durationMins,
+      reversed: false,
+      distanceKm,
+    };
+  }
+  // Mirror the timeline: reversed times t' = C - t, with C chosen so the reversed
+  // journey departs the old terminus at the clock time the original departs its origin.
+  const mirrorC = absOf(first, 'dep') + absOf(last, 'arr');
+  const durationMins = absOf(a, 'arr') - absOf(b, 'dep');
+  if (durationMins <= 0) return null;
+  const depTime = fmtTime(mirrorC - absOf(a, 'arr'));
   return {
-    depTime: fmtTime(depAbs),
-    arrTime: fmtTime(arrAbs),
-    dayOffset: Math.floor((arrAbs - depAbs) / 1440),
-    durationMins: arrAbs - depAbs,
-    reversed,
-    distanceKm: Math.abs(b.km - a.km),
+    depTime,
+    arrTime: fmtTime(mirrorC - absOf(b, 'dep')),
+    dayOffset: Math.floor((toMins(depTime) + durationMins) / 1440),
+    durationMins,
+    reversed: true,
+    distanceKm,
   };
 }
 
@@ -176,22 +187,19 @@ export class MockTrainProvider implements TrainDataProvider {
     const wd = weekdayOfDate(date);
     const results: Train[] = [];
     for (const seed of SEED_TRAINS) {
-      for (const leg of [orientedLeg(seed, fromCode, toCode)]) {
-        if (!leg) continue;
-        const shiftDays = leg.reversed ? Math.floor(leg.durationMins / 1440) : 0;
-        const runsOn = shiftWeekdays(seed.runsOn, shiftDays);
-        if (!runsOn.includes(wd)) continue;
-        results.push({
-          number: seed.number,
-          name: seed.name,
-          runsOn,
-          from: fromCode,
-          to: toCode,
-          depTime: leg.depTime,
-          arrTime: leg.arrTime,
-          durationMins: leg.durationMins,
-        });
-      }
+      const leg = orientedLeg(seed, fromCode, toCode);
+      if (!leg) continue;
+      if (!seed.runsOn.includes(wd)) continue;
+      results.push({
+        number: seed.number,
+        name: seed.name,
+        runsOn: seed.runsOn,
+        from: fromCode,
+        to: toCode,
+        depTime: leg.depTime,
+        arrTime: leg.arrTime,
+        durationMins: leg.durationMins,
+      });
     }
     return results.sort((x, y) => toMins(x.depTime) - toMins(y.depTime));
   }
