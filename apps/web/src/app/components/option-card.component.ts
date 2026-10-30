@@ -1,9 +1,15 @@
 import { Component, computed, input } from '@angular/core';
 
-import { AVAILABILITY_LABELS, AvailabilityState } from '@railvaani/train-core';
+import { AVAILABILITY_LABELS, Availability, AvailabilityState, CLASS_LABELS } from '@railvaani/train-core';
 import { SplitOption } from '@railvaani/split-engine';
 
 type ChipTone = 'ok' | 'warn' | 'bad';
+
+/** Per-class fares and seat status for one direct train, fetched by the app. */
+export interface ClassDetail {
+  fares: Partial<Record<string, number>>;
+  avail: Partial<Record<string, Availability>>;
+}
 
 const CHIP_CLASSES: Record<ChipTone, string> = {
   ok: 'chip chip-ok',
@@ -69,6 +75,29 @@ const CHIP_DARK_CSS = `
             <svg aria-hidden="true" class="ml-1.5 h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M7 17 17 7M9 7h8v8" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </a>
         </div>
+
+        @if (classEntries().length > 1) {
+          <div class="mt-3 rounded-xl bg-slate-50 p-3 dark:bg-slate-800/60">
+            <p class="text-xs font-semibold text-slate-500 dark:text-slate-400">
+              Availability by class &middot; general quota
+            </p>
+            <div class="mt-2 grid gap-1.5 sm:grid-cols-2">
+              @for (row of classEntries(); track row.cls) {
+                <div class="flex items-center justify-between gap-2 text-xs">
+                  <span class="font-medium text-slate-700 dark:text-slate-200">{{ row.label }}</span>
+                  <span class="flex items-center gap-2">
+                    @if (row.fare !== null) {
+                      <span class="tabular-nums text-slate-500 dark:text-slate-400">&#8377;{{ row.fare }}</span>
+                    }
+                    @if (row.avail; as av) {
+                      <span [class]="chip(av)" role="status">{{ chipText(av) }}</span>
+                    }
+                  </span>
+                </div>
+              }
+            </div>
+          </div>
+        }
       </article>
     } @else {
       <article
@@ -135,6 +164,7 @@ const CHIP_DARK_CSS = `
 })
 export class OptionCardComponent {
   readonly option = input.required<SplitOption>();
+  readonly classDetail = input<ClassDetail | null>(null);
   readonly hubName = input('');
   readonly irctcUrl = input('https://www.irctc.co.in/nget/train-search');
 
@@ -142,6 +172,25 @@ export class OptionCardComponent {
   readonly leg = computed(() => this.option().legs[0]!);
   readonly firstDate = computed(() => this.option().legs[0]?.date ?? '');
   readonly duration = computed(() => this.shortDur(this.option().totalDurationMins));
+
+  /** Classes the train sells on this leg, each with its fare and seat status. */
+  readonly classEntries = computed(() => {
+    const d = this.classDetail();
+    if (!d) return [];
+    const rows: { cls: string; label: string; fare: number | null; avail: Availability | null }[] = [];
+    for (const cls of ['SL', '3A', '3E', '2A', '1A', 'CC', '2S'] as const) {
+      const fare = d.fares[cls];
+      const avail = d.avail[cls] ?? null;
+      if (fare === undefined && !avail) continue;
+      rows.push({
+        cls,
+        label: (CLASS_LABELS as Record<string, string>)[cls] ?? cls,
+        fare: fare ?? null,
+        avail,
+      });
+    }
+    return rows;
+  });
 
   shortDur(mins: number): string {
     const h = Math.floor(mins / 60);
