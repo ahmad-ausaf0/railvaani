@@ -34,4 +34,10 @@ export interface TrainDataProvider {
   searchStations(query: string): Promise<Station[]>;
   /** All stations the provider knows, for split-journey hub enumeration. */
   listStations(): Promise<Station[]>;
+  /**
+   * Optional: candidate hub stations between two stations, best first. Providers
+   * backed by a live source should implement this; the split engine uses it
+   * instead of enumerating every known station. Falls back to listStations().
+   */
+  suggestHubs?(from: string, to: string): Promise<string[]>;
 }
