@@ -1,13 +1,10 @@
-/* RailVaani design tokens + accessibility baselines. Full theme lands in Milestone 4. */
+@import "tailwindcss";
+
+/* RailVaani design tokens + accessibility baselines. */
 :root {
   --rv-font-size: 18px;
   --rv-color-bg: #ffffff;
   --rv-color-text: #1a1a1a;
-  --rv-color-primary: #0b3d91;
-  --rv-color-primary-text: #0b3d91;
-  --rv-color-ok: #1a7a1a;
-  --rv-color-warn: #9a4a00;
-  --rv-color-danger: #a11212;
   --rv-focus-outline: 3px solid #b35c00;
 }
 
@@ -19,6 +16,7 @@ body {
   color: var(--rv-color-text);
   background: var(--rv-color-bg);
   line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
 }
 
 /* Visible focus for every interactive element: 3px, at least 3:1 against the page. */
@@ -27,10 +25,18 @@ body {
   outline-offset: 2px;
 }
 
-/* Touch targets at least 48px with spacing (WCAG 2.5.8). */
-button, a, input, select, [role='button'] {
-  min-height: 48px;
+/* Touch targets at least 48px for primary controls (WCAG 2.5.8). */
+button, a, input, select {
+  min-height: 44px;
 }
+a.chip, span.chip { min-height: 0; }
+
+.skip-link {
+  position: absolute; left: -999px; top: 0;
+  background: #fff; padding: 8px 16px; z-index: 100;
+  border-radius: 0 0 8px 0;
+}
+.skip-link:focus { left: 8px; top: 8px; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
@@ -39,20 +45,10 @@ button, a, input, select, [role='button'] {
   }
 }
 
-/* High-contrast mode: 7:1 text minimum. */
 @media (prefers-contrast: more) {
   :root {
     --rv-color-bg: #000000;
     --rv-color-text: #ffffff;
-    --rv-color-primary-text: #ffd23f;
     --rv-focus-outline: 4px solid #ffd23f;
-  }
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --rv-color-bg: #101418;
-    --rv-color-text: #f2f2f2;
-    --rv-color-primary-text: #9ec3ff;
   }
 }

@@ -20,7 +20,12 @@
               "zone.js"
             ],
             "tsConfig": "apps/web/tsconfig.app.json",
-            "assets": [],
+            "assets": [
+              {
+                "glob": "**/*",
+                "input": "apps/web/public"
+              }
+            ],
             "styles": [
               "apps/web/src/styles.css"
             ],
@@ -31,8 +36,8 @@
               "budgets": [
                 {
                   "type": "initial",
-                  "maximumWarning": "200kB",
-                  "maximumError": "250kB"
+                  "maximumWarning": "350kB",
+                  "maximumError": "450kB"
                 }
               ],
               "outputHashing": "all",
