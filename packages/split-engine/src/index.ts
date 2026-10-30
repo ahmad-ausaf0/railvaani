@@ -230,7 +230,7 @@ function recomputeOptionVerdicts(opt: SplitOption): void {
 /** Ranking: within budget, then bookable, then cheapest, then fastest, direct first on ties. */
 function compareOptions(a: SplitOption, b: SplitOption): number {
   if (a.withinBudget !== b.withinBudget) return a.withinBudget ? -1 : 1;
-  if (a.bookable !== b.bookable) return b.bookable ? 1 : -1;
+  if (a.bookable !== b.bookable) return a.bookable ? -1 : 1;
   if (a.totalFare !== b.totalFare) return a.totalFare - b.totalFare;
   if (a.totalDurationMins !== b.totalDurationMins) return a.totalDurationMins - b.totalDurationMins;
   if (a.type !== b.type) return a.type === 'direct' ? -1 : 1;
@@ -283,7 +283,7 @@ export async function findOptions(
       typeof provider.suggestHubs === 'function'
         ? await provider.suggestHubs(query.from, query.to)
         : null;
-    if (suggested && suggested.length > 0) {
+    if (Array.isArray(suggested) && suggested.length > 0) {
       hubs = suggested.filter((c) => c !== query.from && c !== query.to).slice(0, 8);
     } else {
       const stations = (await provider.listStations()) ?? [];

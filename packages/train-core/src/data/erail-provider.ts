@@ -32,9 +32,9 @@ export interface ErailProviderConfig {
   baseUrl?: string;
   /** Minimum gap between upstream calls. Default 250ms. */
   minIntervalMs?: number;
+  /** Trains-between-stations response cache. Default 30 minutes. */
   /** Max concurrent upstream fetches. 1 keeps strict ordering; browsers can raise it. */
   maxConcurrency?: number;
-  /** Trains-between-stations response cache. Default 30 minutes. */
   betweenTtlMs?: number;
   /** Per-train availability cache (date-keyed). Default 90 seconds. */
   trainInfoTtlMs?: number;
@@ -155,20 +155,25 @@ export class ErailProvider implements TrainDataProvider {
 
   /** erail's own via-station suggestions: the split engine's hub candidates. */
   async suggestHubs(from: string, to: string): Promise<string[]> {
-    const key = `hubs:${from}:${to}`;
-    const cached = this.cache.get(key) as CacheEntry<string[]> | undefined;
-    if (cached && cached.expiresAt > this.now()) return cached.value;
+    // Two keys: getText caches the RAW response text, so the parsed hub list
+    // must live under its own key. Sharing one key made the second search's
+    // cache hit return the raw text (a string) where callers expect an array.
+    const parsedKey = `hubs:${from}:${to}`;
+    const rawKey = `hubsRaw:${from}:${to}`;
+    const parsed = this.cache.get(parsedKey) as CacheEntry<string[]> | undefined;
+    if (parsed && parsed.expiresAt > this.now()) return parsed.value;
     const date = new Date(this.now());
     const dd = String(date.getUTCDate()).padStart(2, '0');
     const mon = date.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' });
     const url = `${this.base}/data.aspx?Action=Alternate&Data1=${encodeURIComponent(from)}&Data2=${encodeURIComponent(to)}&Data3=${dd}-${mon}-${date.getUTCFullYear()}`;
-    const text = await this.getText(url, this.hubTtlMs, key);
+    const text = await this.getText(url, this.hubTtlMs, rawKey);
     const hubs: string[] = [];
     for (const item of text.split('~')) {
       if (!item) continue;
       const f = item.split('^');
       if (f.length >= 3 && f[2] && /^[A-Z0-9]{2,5}$/.test(f[2])) hubs.push(f[2].toUpperCase());
     }
+    this.cache.set(parsedKey, { value: hubs, expiresAt: this.now() + this.hubTtlMs });
     return hubs;
   }
 
