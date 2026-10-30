@@ -15,7 +15,7 @@ export interface Station {
   isJunction: boolean;
 }
 
-export type TrainClass = 'SL' | '3A' | '3E' | '2A' | 'CC' | '2S';
+export type TrainClass = 'SL' | '3A' | '3E' | '2A' | '1A' | 'CC' | '2S';
 export type Quota = 'GN' | 'TQ' | 'SR' | 'LD' | 'HP';
 
 export type AvailabilityState =
@@ -108,6 +108,7 @@ export const CLASS_LABELS: Record<TrainClass, string> = {
   '3A': 'AC 3 Tier',
   '3E': 'AC 3 Economy',
   '2A': 'AC 2 Tier',
+  '1A': 'AC First',
   CC: 'Chair Car',
   '2S': 'Second Sitting',
 };
