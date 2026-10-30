@@ -9,6 +9,12 @@ type ChipTone = 'ok' | 'warn' | 'bad';
 export interface ClassDetail {
   fares: Partial<Record<string, number>>;
   avail: Partial<Record<string, Availability>>;
+  /** Seat status for the selected class across recent dates; keyed YYYY-MM-DD. */
+  dateWise?: Partial<Record<string, Availability>>;
+  /** The dates dateWise is keyed by, in display order. */
+  dateWiseDates?: string[];
+  /** Label of the class the date strip shows, e.g. 'Sleeper'. */
+  dateWiseLabel?: string;
 }
 
 const CHIP_CLASSES: Record<ChipTone, string> = {
@@ -22,6 +28,9 @@ const CHIP_DARK_CSS = `
     .chip-ok { background: #052e16; color: #86efac; }
     .chip-warn { background: #451a03; color: #fcd34d; }
     .chip-bad { background: #450a0a; color: #fca5a5; }
+    .date-ok { border-color: #166534; color: #86efac; }
+    .date-warn { border-color: #92400e; color: #fcd34d; }
+    .date-na { border-color: #334155; color: #64748b; }
   }
 `;
 
@@ -63,9 +72,12 @@ const CHIP_DARK_CSS = `
         </div>
 
         <div class="mt-4 flex flex-wrap items-center gap-2">
-          <span [class]="chip(leg().availability)" role="status">
+          <span [class]="chip(leg().availability)" role="status" [attr.title]="asOfTitle(leg().availability)">
             {{ chipText(leg().availability) }}
           </span>
+          @if (leg().availability.asOf; as ao) {
+            <span class="text-[10px] text-slate-400 dark:text-slate-500">as of {{ asOfTime(ao) }} IST</span>
+          }
           <a
             [href]="irctcUrl()"
             target="_blank"
@@ -90,12 +102,31 @@ const CHIP_DARK_CSS = `
                       <span class="tabular-nums text-slate-500 dark:text-slate-400">&#8377;{{ row.fare }}</span>
                     }
                     @if (row.avail; as av) {
-                      <span [class]="chip(av)" role="status">{{ chipText(av) }}</span>
+                      <span [class]="chip(av)" role="status" [attr.title]="asOfTitle(av)">{{ chipText(av) }}</span>
                     }
                   </span>
                 </div>
               }
             </div>
+          </div>
+        }
+
+        @if (dateWiseRows().length > 0) {
+          <div class="mt-3 rounded-xl bg-indigo-50/60 p-3 dark:bg-indigo-950/30">
+            <p class="text-xs font-semibold text-slate-500 dark:text-slate-400">
+              Seats by date &middot; {{ dateWiseLabel() }} &middot; general quota
+            </p>
+            <div class="mt-2 flex flex-wrap gap-1.5">
+              @for (row of dateWiseRows(); track row.date) {
+                <span class="rounded-lg border bg-white px-2 py-1 text-xs tabular-nums dark:bg-slate-900 {{ row.cls }}" [attr.title]="row.title">
+                  <span class="text-slate-500 dark:text-slate-400">{{ row.short }}</span>
+                  <span class="ml-1 font-bold">{{ row.text }}</span>
+                </span>
+              }
+            </div>
+            <p class="mt-1.5 text-[10px] text-slate-400 dark:text-slate-500">
+              Counts are ConfirmTkt snapshots and can lag IRCTC by a few hours; hover a date for its snapshot time.
+            </p>
           </div>
         }
       </article>
@@ -159,6 +190,9 @@ const CHIP_DARK_CSS = `
     .chip-ok { background: #dcfce7; color: #166534; }
     .chip-warn { background: #fef3c7; color: #92400e; }
     .chip-bad { background: #fee2e2; color: #991b1b; }
+    .date-ok { border-color: #86efac; color: #166534; }
+    .date-warn { border-color: #fcd34d; color: #92400e; }
+    .date-na { border-color: #e2e8f0; color: #94a3b8; }
     ${CHIP_DARK_CSS}
   `],
 })
@@ -167,6 +201,9 @@ export class OptionCardComponent {
   readonly classDetail = input<ClassDetail | null>(null);
   readonly hubName = input('');
   readonly irctcUrl = input('https://www.irctc.co.in/nget/train-search');
+  readonly dateWise = input<Partial<Record<string, Availability>> | undefined>(undefined);
+  readonly dateWiseDates = input<string[] | undefined>(undefined);
+  readonly dateWiseLabel = input('');
 
   readonly isDirect = computed(() => this.option().type === 'direct');
   readonly leg = computed(() => this.option().legs[0]!);
@@ -192,6 +229,44 @@ export class OptionCardComponent {
     return rows;
   });
 
+  /** Per-date chips for the strip: date, short label, tone text, snapshot time. */
+  readonly dateWiseRows = computed(() => {
+    const map = this.dateWise();
+    const dates = this.dateWiseDates();
+    if (!map || !dates || dates.length === 0) return [];
+    const wd = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    return dates.map((date) => {
+      const av = map[date] ?? null;
+      const d = new Date(`${date}T00:00:00Z`);
+      const short = `${d.getUTCDate()} ${wd[d.getUTCDay()] ?? ''}`.trim();
+      let text = '\u2014';
+      let cls = 'date-na';
+      if (av) {
+        if (av.state === 'AVAILABLE') {
+          text = av.count > 0 ? `${av.count}` : 'Yes';
+          cls = 'date-ok';
+        } else if (av.state === 'RAC') {
+          text = `RAC ${av.count || ''}`.trim();
+          cls = 'date-warn';
+        } else if (av.state === 'WL') {
+          text = av.count > 0 ? `WL ${av.count}` : 'WL';
+          cls = 'date-warn';
+        }
+      }
+      const title = av?.asOf ? `ConfirmTkt snapshot as of ${this.asOfTime(av.asOf)} IST` : '';
+      return { date, short, text, cls, title };
+    });
+  });
+
+  asOfTime(iso: string): string {
+    const m = /T(\d{2}:\d{2})/.exec(iso ?? '');
+    return m?.[1] ?? '';
+  }
+
+  asOfTitle(a: { asOf?: string }): string {
+    return a?.asOf ? `ConfirmTkt snapshot as of ${this.asOfTime(a.asOf)} IST` : '';
+  }
+
   shortDur(mins: number): string {
     const h = Math.floor(mins / 60);
     const m = mins % 60;
@@ -203,11 +278,15 @@ export class OptionCardComponent {
     return CHIP_CLASSES[tone];
   }
 
-  chipText(a: { state: string; count: number }): string {
+  chipText(a: { state: string; count: number; wlPrefix?: string }): string {
     const key = (a.state ?? 'NOT_AVAILABLE') as keyof typeof AVAILABILITY_LABELS;
     const meta = AVAILABILITY_LABELS[key] ?? AVAILABILITY_LABELS['NOT_AVAILABLE'];
-    const suffix =
-      a.count > 0 && (a.state === 'AVAILABLE' || a.state === 'WL') ? ` (${a.count})` : '';
+    let suffix = '';
+    if (a.state === 'AVAILABLE' && a.count > 0) suffix = ` (${a.count})`;
+    if (a.state === 'WL' && a.count > 0) {
+      // IRCTC notation, e.g. GNWL104/WL64, so the figure reads like the booking site.
+      suffix = a.wlPrefix ? ` (${a.wlPrefix}/${a.count})` : ` (WL ${a.count})`;
+    }
     return `${meta.icon} ${meta.en}${suffix}`;
   }
 

@@ -71,4 +71,20 @@ export class RailService {
   fareTableFor(trainNo: string, from: string, to: string): Partial<Record<string, number>> {
     return this.provider.getFareTable(trainNo, from, to);
   }
+
+  /** Warms per-date caches for a route: one upstream call per date, cached. */
+  warmDates(from: string, to: string, dates: string[]): Promise<void> {
+    return this.provider.warmDates(from, to, dates);
+  }
+
+  /** Cached per-date seat status for one train+class; call warmDates first. */
+  dateWiseFor(
+    trainNo: string,
+    from: string,
+    to: string,
+    cls: TrainClass,
+    dates: string[],
+  ): Partial<Record<string, Availability>> {
+    return this.provider.dateWise(trainNo, from, to, cls, dates);
+  }
 }
