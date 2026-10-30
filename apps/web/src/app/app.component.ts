@@ -50,7 +50,7 @@ const IRCTC_URL = 'https://www.irctc.co.in/nget/train-search';
       <h1 class="sr-only">Find trains across India</h1>
 
       <!-- Search card -->
-      <section class="-mt-5 rounded-2xl border border-slate-200 bg-white p-4 shadow-lg sm:p-6 dark:border-slate-800 dark:bg-slate-900" aria-label="Search form">
+      <section class="mt-6 rounded-2xl border border-slate-200 bg-white p-4 shadow-lg sm:p-6 dark:border-slate-800 dark:bg-slate-900" aria-label="Search form">
         <button
           type="button"
           (click)="startVoice()"
@@ -383,7 +383,7 @@ export class AppComponent implements OnInit {
     this.voiceNote.set('');
     rec.onresult = (e: SpeechEvent) => {
       const said = e.results[0]?.[0]?.transcript ?? '';
-      const m = said.match(/(?:from\s+)?(.+?)\s+(?:to|se|से)\s+(.+)$/i);
+      const m = said.match(/(?:from\\s+)?(.+?)\\s+(?:to|se|से)\\s+(.+)$/i);
       if (m?.[1] && m?.[2]) {
         const f = this.stations.resolve(m[1].trim());
         const t = this.stations.resolve(m[2].trim());
