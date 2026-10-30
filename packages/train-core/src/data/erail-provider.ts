@@ -1,3 +1,30 @@
+/**
+ * ErailProvider: live all-India train data from erail.in's undocumented text
+ * endpoints (the same ones erail's own pages call). No API key involved.
+ *
+ * Format verified against live responses (Oct 2026):
+ *  rail/getTrains.aspx?Station_From=..&Station_To=.. -> a header segment, then one
+ *  ^-prefixed record per train, ~-delimited fields:
+ *    0 number, 1 name, 6/7 boarding name/code, 8/9 alighting name/code,
+ *    10 dep "HH.MM", 11 arr "HH.MM", 12 duration "HH.MM" (hours may exceed 24),
+ *    13 run mask at the boarding station (Mon-first), 32 type code,
+ *    33 route id, 39 leg distance km, 41 fare table for THIS leg.
+ *  Fare table: "TYPE:DISTANCE:g0:g1:..." with groups in the fixed order
+ *  1A, 2A, 3A, CC, EC, SL, FC, 3E, 2S; first value of each group is the fare.
+ *  The search response is date-independent; date filtering happens here.
+ *
+ *  rail/getTrains.aspx?TrainNo=..&DateOfJourney=dd-MM-yyyy -> same shape plus an
+ *  availability block (class:total:available:rac:wl per class, |-separated).
+ *  Availability is date-specific with this param. Semantics of the four numbers
+ *  are erail's own; we map them conservatively and the UI labels them indicative.
+ *
+ *  data.aspx?Action=Alternate&Data1=FROM&Data2=TO&Data3=dd-MMM-yyyy -> erail's own
+ *  via-station suggestions, one ~-separated item per candidate: FROM^TO^CODE^NAME.
+ *
+ *  data.aspx?Action=TRAINROUTE&Password=2012&Data1=<routeId>&Data2=0 -> stop
+ *  records: seq^code^name^arr^dep^halt^km^day. The password is a constant erail's
+ *  own page JavaScript sends; it is not a credential.
+ */
 import { Availability, Quota, Station, Stop, Train, TrainClass, Weekday } from '../models/train.models';
 import { ProviderError, TrainDataProvider } from './train-data-provider';
 
@@ -15,6 +42,16 @@ export interface ErailProviderConfig {
   hubTtlMs?: number;
   /** Stations for autocomplete and name resolution. Set after load via setStations. */
   stationDirectory?: Station[];
+  /**
+   * Browser builds: erail.in sends no CORS headers, so cross-origin reads are
+   * blocked there. Each entry wraps an erail URL in a CORS-enabled relay
+   * (e.g. (u) => `https://r.jina.ai/${u}`); they rotate so one relay's rate
+   * limit is never the single point of failure, and a relay that fails sits
+   * out for a short cooldown.
+   */
+  proxyFallbacks?: ((url: string) => string)[];
+  /** Go straight to the relays instead of direct-first. Set in browser builds. */
+  preferProxy?: boolean;
   fetchImpl?: typeof fetch;
   now?: () => number;
 }
@@ -76,6 +113,12 @@ export class ErailProvider implements TrainDataProvider {
   private readonly trainInfoTtlMs: number;
   private readonly routeTtlMs: number;
   private readonly hubTtlMs: number;
+  private readonly proxyFallbacks?: ((url: string) => string)[];
+  private readonly preferProxy: boolean;
+  /** Rotation cursor: next relay to prefer, so load spreads across relays. */
+  private proxyCursor = 0;
+  /** Relay failed at t: skip it until t + 90s. */
+  private readonly proxyCooldown: number[] = [];
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => number;
 
@@ -91,6 +134,8 @@ export class ErailProvider implements TrainDataProvider {
     this.trainInfoTtlMs = config.trainInfoTtlMs ?? 90_000;
     this.routeTtlMs = config.routeTtlMs ?? 24 * 60 * 60_000;
     this.hubTtlMs = config.hubTtlMs ?? 24 * 60 * 60_000;
+    this.proxyFallbacks = config.proxyFallbacks;
+    this.preferProxy = config.preferProxy ?? false;
     this.fetchImpl = config.fetchImpl ?? ((u, i) => fetch(u, i));
     this.now = config.now ?? Date.now;
     this.stations = [...(config.stationDirectory ?? [])];
@@ -269,24 +314,80 @@ export class ErailProvider implements TrainDataProvider {
     }
   }
 
+  /** Relay order for one call: rotation cursor first, healthy before cooling. */
+  private relayOrder(): number[] {
+    const n = this.proxyFallbacks?.length ?? 0;
+    const idx: number[] = [];
+    for (let k = 0; k < n; k++) idx.push((this.proxyCursor + k) % n);
+    const now = this.now();
+    const ok = idx.filter((i) => (this.proxyCooldown[i] ?? 0) <= now);
+    const cooling = idx.filter((i) => (this.proxyCooldown[i] ?? 0) > now);
+    return [...ok, ...cooling];
+  }
+
   private async throttledFetch(url: string): Promise<string> {
     const run = this.queue.then(async () => {
       await sleep(this.minIntervalMs);
-      const res = await this.fetchImpl(url, {
-        headers: { 'User-Agent': 'RailVaani/0.3 (train schedule demo)' } as Record<string, string>,
-      });
-      if (!res.ok) throw new ProviderError('provider_down', `Upstream returned HTTP ${res.status}.`);
-      const text = (await res.text()).trim();
-      if (text.startsWith('<')) {
-        throw new ProviderError('provider_down', 'Upstream returned an HTML error page.');
+      const wraps = this.proxyFallbacks ?? [];
+      const chain: { target: string; wrap: number | null }[] = [];
+      const relays = this.relayOrder();
+      if (this.preferProxy) {
+        for (const i of relays) {
+          const wrap = wraps[i];
+          if (!wrap) continue;
+          chain.push({ target: wrap(url), wrap: i });
+        }
+        chain.push({ target: url, wrap: null });
+      } else {
+        chain.push({ target: url, wrap: null });
+        for (const i of relays) {
+          const wrap = wraps[i];
+          if (!wrap) continue;
+          chain.push({ target: wrap(url), wrap: i });
+        }
       }
-      return text;
+      // Browsers reject cross-origin reads when the upstream sends no CORS
+      // headers (fetch throws TypeError); relays also have their own outages
+      // and rate limits. Walk the chain until something returns usable text.
+      let lastErr: unknown;
+      for (const { target, wrap } of chain) {
+        try {
+          const text = await this.doFetch(target);
+          if (wrap !== null) {
+            this.proxyCursor = (wrap + 1) % wraps.length;
+            this.proxyCooldown[wrap] = 0;
+          }
+          return text;
+        } catch (e) {
+          lastErr = e;
+          if (wrap !== null) this.proxyCooldown[wrap] = this.now() + 90_000;
+        }
+      }
+      throw lastErr;
     });
     this.queue = run.then(
       () => undefined,
       () => undefined,
     );
     return run;
+  }
+
+  private async doFetch(target: string): Promise<string> {
+    const res = await this.fetchImpl(target, {
+      headers: { 'User-Agent': 'RailVaani/0.3 (train schedule demo)' } as Record<string, string>,
+    });
+    if (!res.ok) throw new ProviderError('provider_down', `Upstream returned HTTP ${res.status}.`);
+    let text = (await res.text()).trim();
+    // Reader relays (r.jina.ai) wrap the payload in a short preamble; erail
+    // payloads never start with "Title:".
+    if (text.startsWith('Title:')) {
+      const k = text.indexOf('Markdown Content:');
+      if (k >= 0) text = text.slice(k + 'Markdown Content:'.length).trim();
+    }
+    if (text.startsWith('<')) {
+      throw new ProviderError('provider_down', 'Upstream returned an HTML error page.');
+    }
+    return text;
   }
 
   private ddmmyyyy(date: string): string {

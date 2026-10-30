@@ -6,7 +6,18 @@ import { findOptions, SplitOption } from '@railvaani/split-engine';
 /** Talks to the live all-India data source (erail's public endpoints, no key). */
 @Injectable({ providedIn: 'root' })
 export class RailService {
-  private readonly provider = new ErailProvider({ minIntervalMs: 200 });
+  // Browsers cannot read erail.in cross-origin (no CORS headers on its side), so
+  // every call goes through a CORS-enabled proxy; the direct route stays the
+  // server-side path.
+  private readonly provider = new ErailProvider({
+    minIntervalMs: 200,
+    preferProxy: true,
+    proxyFallbacks: [
+      (u) => `https://r.jina.ai/${u}`,
+      (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+      (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
+    ],
+  });
 
   useStations(stations: Station[]): void {
     this.provider.setStations(stations);
