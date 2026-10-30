@@ -1,11 +1,11 @@
 import { Component, OnInit, computed, inject, signal } from '@angular/core';
 
-import { CLASS_LABELS, Station, TrainClass } from '@railvaani/train-core';
+import { Availability, CLASS_LABELS, Station, TrainClass } from '@railvaani/train-core';
 import { SplitOption } from '@railvaani/split-engine';
 
 import { RailService } from './services/rail.service';
 import { StationsService } from './services/stations.service';
-import { OptionCardComponent } from './components/option-card.component';
+import { ClassDetail, OptionCardComponent } from './components/option-card.component';
 import { StationInputComponent } from './components/station-input.component';
 
 interface SpeechAlternative { transcript: string }
@@ -22,6 +22,8 @@ interface Recognition {
   onerror: ((e: { error?: string }) => void) | null;
   onend: (() => void) | null;
 }
+
+const IRCTC_URL = 'https://www.irctc.co.in/nget/train-search';
 
 @Component({
   selector: 'rv-root',
@@ -47,6 +49,7 @@ interface Recognition {
     <main id="main" class="mx-auto max-w-3xl px-4 pb-16">
       <h1 class="sr-only">Find trains across India</h1>
 
+      <!-- Search card -->
       <section class="-mt-5 rounded-2xl border border-slate-200 bg-white p-4 shadow-lg sm:p-6 dark:border-slate-800 dark:bg-slate-900" aria-label="Search form">
         <button
           type="button"
@@ -115,7 +118,11 @@ interface Recognition {
           class="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-3 text-base font-bold text-white transition hover:bg-indigo-700 disabled:opacity-60">
           @if (searching()) {
             <svg class="h-5 w-5 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-90" fill="currentColor" d="M4 12a8 8 0 0 1 8-8v4a4 4 0 0 0-4 4H4z"/></svg>
-            Searching live schedules&hellip;
+            @if (progressTotal() > 0) {
+              Checking seats {{ progressDone() }}/{{ progressTotal() }} &middot; {{ elapsed() }}s&hellip;
+            } @else {
+              Finding trains &middot; {{ elapsed() }}s&hellip;
+            }
           } @else { Search trains }
         </button>
 
@@ -136,6 +143,7 @@ interface Recognition {
         </div>
       }
 
+      <!-- Results -->
       @if (results(); as rs) {
         <section class="mt-6" aria-label="Search results">
           <div class="flex flex-wrap items-center gap-2">
@@ -150,12 +158,13 @@ interface Recognition {
           </div>
           <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
             Schedules and fares live from Indian Railways data. Availability is indicative; booking happens on IRCTC.
+            @if (isToday()) { Trains that already departed today are not shown. }
           </p>
 
           <h2 class="mt-5 text-sm font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">Direct trains</h2>
           <div class="mt-2 space-y-3">
             @for (o of shown(); track trackKey(o)) {
-              @if (o.type === 'direct') { <rv-option-card [option]="o" /> }
+              @if (o.type === 'direct') { <rv-option-card [option]="o" [classDetail]="classDetailFor(o)" /> }
             } @empty {
               <p class="rounded-xl bg-slate-50 p-4 text-sm text-slate-500 dark:bg-slate-800/60 dark:text-slate-400">No direct train runs this route on this date. Check the split options below.</p>
             }
@@ -216,6 +225,11 @@ export class AppComponent implements OnInit {
   readonly error = signal('');
   readonly voiceNote = signal('');
   readonly sort = signal<'best' | 'cheapest' | 'fastest'>('best');
+  readonly progressStage = signal<'searching' | 'checking_seats'>('searching');
+  readonly progressDone = signal(0);
+  readonly progressTotal = signal(0);
+  readonly elapsed = signal(0);
+  readonly classDetails = signal<Record<string, ClassDetail>>({});
 
   readonly fromSuggest = signal<Station[]>([]);
   readonly toSuggest = signal<Station[]>([]);
@@ -282,7 +296,14 @@ export class AppComponent implements OnInit {
     this.toCode.set(to);
     this.error.set('');
     this.results.set(null);
+    this.classDetails.set({});
     this.searching.set(true);
+    this.progressStage.set('searching');
+    this.progressDone.set(0);
+    this.progressTotal.set(0);
+    const started = Date.now();
+    this.elapsed.set(0);
+    const tick = setInterval(() => this.elapsed.set(Math.round((Date.now() - started) / 1000)), 1000);
     try {
       const budgetNum = Number(this.budget());
       const opts = await this.rail.find(
@@ -290,17 +311,52 @@ export class AppComponent implements OnInit {
         this.date() || this.minDate,
         this.cls(),
         Number.isFinite(budgetNum) && budgetNum > 0 ? budgetNum : undefined,
+        (p) => {
+          this.progressStage.set(p.stage);
+          this.progressDone.set(p.done);
+          this.progressTotal.set(p.total);
+        },
       );
       this.results.set(opts);
       if (opts.length === 0) {
         this.error.set('No trains found for this route, class and date. Try another class or date.');
       }
+      void this.loadClassDetails(opts);
     } catch (e) {
       this.results.set(null);
       this.error.set(e instanceof Error ? e.message : 'Something went wrong. Please try again.');
     } finally {
+      clearInterval(tick);
       this.searching.set(false);
     }
+  }
+
+  isToday(): boolean {
+    const d = new Date(Date.now() + (5 * 60 + 30) * 60_000);
+    return (this.date() || this.minDate) === d.toISOString().slice(0, 10);
+  }
+
+  classDetailFor(o: SplitOption): ClassDetail | null {
+    if (o.type !== 'direct') return null;
+    return this.classDetails()[o.legs[0]!.trainNumber] ?? null;
+  }
+
+  /** Fills the class-wise availability table on direct cards from the search's cache. */
+  private async loadClassDetails(opts: SplitOption[]): Promise<void> {
+    const details: Record<string, ClassDetail> = {};
+    const seen = new Set<string>();
+    for (const o of opts) {
+      if (o.type !== 'direct') continue;
+      const leg = o.legs[0]!;
+      if (seen.has(leg.trainNumber)) continue;
+      seen.add(leg.trainNumber);
+      const avail = await this.rail.availabilityFor(leg.trainNumber, leg.date).catch(() => ({}));
+      details[leg.trainNumber] = {
+        fares: this.rail.fareTableFor(leg.trainNumber, leg.from, leg.to),
+        avail,
+      };
+    }
+    this.classDetails.set(details);
   }
 
   private resolveFromField(text: string, code: string | null): string | null {
