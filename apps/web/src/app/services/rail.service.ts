@@ -1,6 +1,6 @@
 import { Injectable } from '@angular/core';
 
-import { Availability, ErailProvider, Station, TrainClass } from '@railvaani/train-core';
+import { Availability, ConfirmTktProvider, ErailProvider, Station, TrainClass } from '@railvaani/train-core';
 import { findOptions, SplitOption } from '@railvaani/split-engine';
 
 /** Live progress the UI shows while a search runs. */
@@ -10,26 +10,32 @@ export interface SearchProgress {
   total: number;
 }
 
-/** Talks to the live all-India data source (erail's public endpoints, no key). */
+/** Talks to the live all-India data sources (ConfirmTkt + erail, no key). */
 @Injectable({ providedIn: 'root' })
 export class RailService {
-  // Browsers cannot read erail.in cross-origin (no CORS headers on its side),
-  // so every call goes through a CORS-enabled relay; the direct route stays
-  // the server-side path. r.jina.ai is the only public relay that reliably
-  // echoes a permissive access-control-allow-origin; the others fail outright
-  // from the browser and only add failed round-trips to every call. The
-  // provider keeps a small fetch pool under jina's ~20 requests/minute limit
-  // and retries 429s, so a search of a dozen trains settles in well under a
-  // minute instead of minutes.
-  private readonly provider = new ErailProvider({
+  // Primary: ConfirmTkt's public trains API serves the train list, live seat
+  // availability and quoted fares for a leg in ONE JSON call, answers with a
+  // permissive access-control-allow-origin header, and needs no key, so the
+  // browser calls it directly: no relays, no text scraping. It exposes no
+  // route and no via-station endpoints.
+  //
+  // Secondary: erail's text endpoints fill those two gaps, from the browser
+  // through the one working CORS relay (browsers cannot read erail.in
+  // cross-origin). r.jina.ai is the only public relay that reliably echoes a
+  // permissive access-control-allow-origin. Both fallback calls are cached
+  // hard: one per route (hub suggestions, 24h) and one per train (route,
+  // 24h), so a search pays them once and reuses them.
+  private readonly erail = new ErailProvider({
     minIntervalMs: 300,
     maxConcurrency: 3,
     preferProxy: true,
     proxyFallbacks: [(u) => `https://r.jina.ai/${u}`],
   });
 
+  private readonly provider = new ConfirmTktProvider(this.erail);
+
   useStations(stations: Station[]): void {
-    this.provider.setStations(stations);
+    this.erail.setStations(stations);
   }
 
   async find(
