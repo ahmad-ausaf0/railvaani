@@ -23,8 +23,6 @@ interface Recognition {
   onend: (() => void) | null;
 }
 
-const IRCTC_URL = 'https://www.irctc.co.in/nget/train-search';
-
 @Component({
   selector: 'rv-root',
   imports: [StationInputComponent, OptionCardComponent],
@@ -49,7 +47,6 @@ const IRCTC_URL = 'https://www.irctc.co.in/nget/train-search';
     <main id="main" class="mx-auto max-w-3xl px-4 pb-16">
       <h1 class="sr-only">Find trains across India</h1>
 
-      <!-- Search card -->
       <section class="-mt-5 rounded-2xl border border-slate-200 bg-white p-4 shadow-lg sm:p-6 dark:border-slate-800 dark:bg-slate-900" aria-label="Search form">
         <button
           type="button"
@@ -126,7 +123,7 @@ const IRCTC_URL = 'https://www.irctc.co.in/nget/train-search';
           @for (ex of examples; track ex[0]) {
             <button type="button" (click)="tryExample(ex[0], ex[1])"
               class="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:border-indigo-300 hover:text-indigo-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
-              {{ ex[0] }} &rarr; {{ ex[1] }
+              {{ ex[0] }} &rarr; {{ ex[1] }}
             </button>
           }
         </div>
@@ -139,7 +136,6 @@ const IRCTC_URL = 'https://www.irctc.co.in/nget/train-search';
         </div>
       }
 
-      <!-- Results -->
       @if (results(); as rs) {
         <section class="mt-6" aria-label="Search results">
           <div class="flex flex-wrap items-center gap-2">
