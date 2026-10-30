@@ -15,7 +15,7 @@ interface Recognition {
   lang: string;
   continuous: boolean;
   interimResults: boolean;
-  maxAlternatives: number;
+  maxAlternatives: 1;
   start(): void;
   stop(): void;
   onresult: ((e: SpeechEvent) => void) | null;
@@ -148,7 +148,7 @@ const IRCTC_URL = 'https://www.irctc.co.in/nget/train-search';
         <section class="mt-6" aria-label="Search results">
           <div class="flex flex-wrap items-center gap-2">
             <p class="mr-auto text-sm font-semibold text-slate-700 dark:text-slate-200" role="status">
-              {{ rs.length }} options · {{ stations.name(fromCode()) || fromCode() }} to {{ stations.name(toCode()) || toCode() }}
+              {{ rs.length }} options \u00b7 {{ stations.name(fromCode()) || fromCode() }} to {{ stations.name(toCode()) || toCode() }}
             </p>
             @for (s of sorts; track s.key) {
               <button type="button" (click)="sort.set(s.key)" [class]="sortChip(s.key)">
@@ -157,14 +157,19 @@ const IRCTC_URL = 'https://www.irctc.co.in/nget/train-search';
             }
           </div>
           <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-            Schedules and fares live from Indian Railways data. Availability is indicative; booking happens on IRCTC.
+            Schedules and fares live from Indian Railways data. Availability comes from ConfirmTkt's cache and can
+            lag IRCTC by a few hours; each figure carries its snapshot time. Booking happens on IRCTC.
             @if (isToday()) { Trains that already departed today are not shown. }
           </p>
 
           <h2 class="mt-5 text-sm font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">Direct trains</h2>
           <div class="mt-2 space-y-3">
             @for (o of shown(); track trackKey(o)) {
-              @if (o.type === 'direct') { <rv-option-card [option]="o" [classDetail]="classDetailFor(o)" /> }
+              @if (o.type === 'direct') {
+                <rv-option-card [option]="o" [classDetail]="classDetailFor(o)"
+                  [dateWise]="classDetailFor(o)?.dateWise" [dateWiseDates]="classDetailFor(o)?.dateWiseDates"
+                  [dateWiseLabel]="classLabel(cls())" />
+              }
             } @empty {
               <p class="rounded-xl bg-slate-50 p-4 text-sm text-slate-500 dark:bg-slate-800/60 dark:text-slate-400">No direct train runs this route on this date. Check the split options below.</p>
             }
@@ -341,22 +346,42 @@ export class AppComponent implements OnInit {
     return this.classDetails()[o.legs[0]!.trainNumber] ?? null;
   }
 
-  /** Fills the class-wise availability table on direct cards from the search's cache. */
+  /** Fills the class-wise table and the per-date seat strip on direct cards. */
   private async loadClassDetails(opts: SplitOption[]): Promise<void> {
     const details: Record<string, ClassDetail> = {};
     const seen = new Set<string>();
+    const dates = this.recentDates();
+    let warmed = false;
     for (const o of opts) {
       if (o.type !== 'direct') continue;
       const leg = o.legs[0]!;
       if (seen.has(leg.trainNumber)) continue;
       seen.add(leg.trainNumber);
+      if (!warmed) {
+        // One upstream call per date, then every train's strip reads from cache.
+        warmed = true;
+        await this.rail.warmDates(leg.from, leg.to, dates).catch(() => undefined);
+      }
       const avail = await this.rail.availabilityFor(leg.trainNumber, leg.date).catch(() => ({}));
       details[leg.trainNumber] = {
         fares: this.rail.fareTableFor(leg.trainNumber, leg.from, leg.to),
         avail,
+        dateWise: this.rail.dateWiseFor(leg.trainNumber, leg.from, leg.to, this.cls(), dates),
+        dateWiseDates: dates,
       };
+      this.classDetails.set({ ...details });
     }
-    this.classDetails.set(details);
+  }
+
+  /** The searched date plus the next five, as YYYY-MM-DD (UTC arithmetic; India has no DST). */
+  private recentDates(): string[] {
+    const base = this.date() || this.minDate;
+    const parts = base.split('-').map(Number);
+    const start = Date.UTC(parts[0] ?? 2026, (parts[1] ?? 1) - 1, parts[2] ?? 1);
+    return Array.from({ length: 6 }, (_, i) => {
+      const t = new Date(start + i * 86_400_000);
+      return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, '0')}-${String(t.getUTCDate()).padStart(2, '0')}`;
+    });
   }
 
   private resolveFromField(text: string, code: string | null): string | null {
@@ -383,7 +408,7 @@ export class AppComponent implements OnInit {
     this.voiceNote.set('');
     rec.onresult = (e: SpeechEvent) => {
       const said = e.results[0]?.[0]?.transcript ?? '';
-      const m = said.match(/(?:from\s+)?(.+?)\s+(?:to|se|से)\s+(.+)$/i);
+      const m = said.match(/(?:from\\s+)?(.+?)\\s+(?:to|se|\u0938\u0947)\\s+(.+)$/i);
       if (m?.[1] && m?.[2]) {
         const f = this.stations.resolve(m[1].trim());
         const t = this.stations.resolve(m[2].trim());
