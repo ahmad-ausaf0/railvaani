@@ -31,6 +31,8 @@ export interface Availability {
   count: number;
   /** e.g. 'GNWL12' when state is WL. */
   wlPrefix?: string;
+  /** Upstream snapshot time (ISO, the provider's own zone) when the source stamps one. */
+  asOf?: string;
 }
 
 export interface Train {

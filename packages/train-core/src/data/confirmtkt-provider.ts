@@ -103,14 +103,14 @@ function parseRuns(mask: string | undefined): Weekday[] {
  * Maps one ConfirmTkt availability entry onto the app's Availability. Order
  * matters: "REGRET/WL" and "NOT AVAILABLE" also contain WL and AVAILABLE.
  */
-function mapAvailability(entry: CtAvailabilityEntry): Availability {
+function mapAvailabilityRaw(entry: CtAvailabilityEntry): Availability {
   const rawAv = (entry.availability ?? '').trim();
   const text = `${rawAv} ${entry.availabilityDisplayName ?? ''}`.toUpperCase();
   const count = (pattern: RegExp): number => {
     const m = pattern.exec(text);
     return m?.[1] ? Number(m[1]) : 0;
   };
-  if (/REGRET|NOT AVAILABLE/.test(text)) {
+  if (/REGRET|NOT AVAILABLE|NOT AVAILABLE/.test(text)) {
     return { state: 'NOT_AVAILABLE', count: 0 };
   }
   if (/\bRAC\b/.test(text)) {
@@ -141,6 +141,14 @@ function mapAvailability(entry: CtAvailabilityEntry): Availability {
   return { state: 'NOT_AVAILABLE', count: 0 };
 }
 
+/** Maps one entry, stamping the upstream snapshot time (ConfirmTkt cacheTime,
+ * its own IST wall clock) onto the result so the UI can show data freshness. */
+function mapAvailability(entry: CtAvailabilityEntry): Availability {
+  const base = mapAvailabilityRaw(entry);
+  const ct = (entry.cacheTime ?? '').trim();
+  return ct ? { ...base, asOf: ct } : base;
+}
+
 export class ConfirmTktProvider implements TrainDataProvider {
   private readonly base: string;
   private readonly minIntervalMs: number;
@@ -151,7 +159,7 @@ export class ConfirmTktProvider implements TrainDataProvider {
   private readonly fallback: TrainDataProvider;
 
   private readonly cache = new Map<string, { value: unknown; expiresAt: number }>();
-  /** trainNo -> legKey (FROM|TO) -> cached classes for that leg. */
+  /** trainNo -> legKey (FROM|TO|DATE) -> cached classes for that leg. */
   private readonly legs = new Map<string, Map<string, LegEntry>>();
   private inFlight = 0;
   private lastStart = 0;
@@ -241,13 +249,13 @@ export class ConfirmTktProvider implements TrainDataProvider {
     _quota: Quota,
   ): Promise<number> {
     const number = trainNo.trim();
-    const legKey = `${from.toUpperCase()}|${to.toUpperCase()}`;
-    let leg = this.legs.get(number)?.get(legKey);
-    if (!leg || leg.expiresAt <= this.now()) {
+    const prefix = `${from.toUpperCase()}|${to.toUpperCase()}`;
+    let leg = this.findLeg(number, prefix, this.lastDate);
+    if (!leg) {
       // The engine always searches a leg before pricing it, so this cold path
       // is rare; the date comes from the most recent search.
       if (this.lastDate) await this.searchTrains(from, to, this.lastDate);
-      leg = this.legs.get(number)?.get(legKey);
+      leg = this.findLeg(number, prefix, this.lastDate);
     }
     const fare = Number(leg?.classes[cls]?.fare);
     if (!Number.isFinite(fare) || fare <= 0) {
@@ -274,8 +282,8 @@ export class ConfirmTktProvider implements TrainDataProvider {
 
   /** Cached per-class fares for a leg; no network call. Empty when uncached. */
   getFareTable(trainNo: string, from: string, to: string): Partial<Record<string, number>> {
-    const leg = this.legs.get(trainNo.trim())?.get(`${from.toUpperCase()}|${to.toUpperCase()}`);
-    if (!leg || leg.expiresAt <= this.now()) return {};
+    const leg = this.findLeg(trainNo.trim(), `${from.toUpperCase()}|${to.toUpperCase()}`, this.lastDate);
+    if (!leg) return {};
     const out: Partial<Record<string, number>> = {};
     for (const [cls, ce] of Object.entries(leg.classes)) {
       const fare = Number(ce?.fare);
@@ -302,6 +310,51 @@ export class ConfirmTktProvider implements TrainDataProvider {
     return this.fallback.suggestHubs!(from, to);
   }
 
+  /** The freshest cached leg for a train on a from|to pair, preferring the date. */
+  private findLeg(trainNo: string, prefix: string, date?: string): LegEntry | undefined {
+    const byLeg = this.legs.get(trainNo);
+    if (!byLeg) return undefined;
+    const fresh = [...byLeg.values()].filter(
+      (l) => l.expiresAt > this.now() && `${l.from}|${l.to}` === prefix,
+    );
+    return fresh.find((l) => l.date === date) ?? fresh[0];
+  }
+
+  /**
+   * Warms the per-date caches for a route: one upstream search per date (each
+   * returns every train on the route that day), throttled and cached. Call
+   * before dateWise; failures on individual dates are ignored.
+   */
+  async warmDates(from: string, to: string, dates: string[]): Promise<void> {
+    for (const date of dates) {
+      try {
+        await this.searchTrains(from, to, date);
+      } catch {
+        // Best effort: dateWise simply omits dates it has no data for.
+      }
+    }
+  }
+
+  /** Cached per-date seat status for one train+class on a leg; call warmDates first. */
+  dateWise(
+    trainNo: string,
+    from: string,
+    to: string,
+    cls: TrainClass,
+    dates: string[],
+  ): Partial<Record<string, Availability>> {
+    const out: Partial<Record<string, Availability>> = {};
+    const byLeg = this.legs.get(trainNo.trim());
+    if (!byLeg) return out;
+    for (const date of dates) {
+      const leg = byLeg.get(`${from.toUpperCase()}|${to.toUpperCase()}|${date}`);
+      if (!leg || leg.expiresAt <= this.now()) continue;
+      const ce = leg.classes[cls];
+      if (ce) out[date] = mapAvailability(ce);
+    }
+    return out;
+  }
+
   // ---------------------------------------------------------------- internals
 
   /** Date of the most recent search; getFare has no date parameter. */
@@ -316,10 +369,11 @@ export class ConfirmTktProvider implements TrainDataProvider {
     cls: string,
   ): Promise<CtAvailabilityEntry> {
     const number = trainNo.trim();
-    let leg = this.legs.get(number)?.get(`${from}|${to}`);
-    if (!leg || leg.expiresAt <= this.now()) {
+    const prefix = `${from.toUpperCase()}|${to.toUpperCase()}`;
+    let leg = this.findLeg(number, prefix, date);
+    if (!leg) {
       await this.searchTrains(from, to, date);
-      leg = this.legs.get(number)?.get(`${from}|${to}`);
+      leg = this.findLeg(number, prefix, date);
     }
     const entry = leg?.classes[cls];
     if (!entry) throw new ProviderError('no_seats', `Train ${trainNo} offers no ${cls} on this leg.`);
@@ -339,7 +393,7 @@ export class ConfirmTktProvider implements TrainDataProvider {
       byLeg = new Map();
       this.legs.set(trainNo, byLeg);
     }
-    byLeg.set(`${from}|${to}`, {
+    byLeg.set(`${from}|${to}|${date}`, {
       from,
       to,
       date,
