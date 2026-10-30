@@ -34,6 +34,14 @@ export interface SplitQuery {
   /** Cap on returned options. Default 8. */
   maxResults?: number;
   /**
+   * Hide trains whose departure on the journey date has already passed
+   * (railway time is IST). Default false: mock-provider tests use fixed
+   * dates, and a server in another timezone must not guess the user's now.
+   */
+  excludeDeparted?: boolean;
+  /** Optional live progress: (stage, done, total) as the search advances. */
+  onProgress?: (stage: 'searching' | 'checking_seats', done: number, total: number) => void;
+  /**
    * 'eager' (default) fetches availability for every candidate, like the mock
    * provider tests expect. 'deferred' builds fares-only options first, then
    * fetches availability for the top slice only: the right mode for live
@@ -100,6 +108,32 @@ function arrivalAbs(t: Train): number {
 function departureAbs(t: Train): number {
   const [h, m] = t.depTime.split(':');
   return (Number(h) || 0) * 60 + (Number(m) || 0);
+}
+
+/** Today's date and minutes-of-day on IST (railway time), for a UTC instant. */
+function istNow(nowMs: number): { date: string; mins: number } {
+  const d = new Date(nowMs + (5 * 60 + 30) * 60_000);
+  return { date: d.toISOString().slice(0, 10), mins: d.getUTCHours() * 60 + d.getUTCMinutes() };
+}
+
+/** Departure minutes-of-day from an 'HH:MM' clock string. */
+function depMinutesOf(depTime: string): number {
+  const [h, m] = depTime.split(':');
+  return (Number(h) || 0) * 60 + (Number(m) || 0);
+}
+
+/** Runs async jobs with bounded concurrency. */
+async function pMap<T>(items: T[], fn: (item: T) => Promise<void>, limit: number): Promise<void> {
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (;;) {
+      const i = next;
+      if (i >= items.length) return;
+      next = i + 1;
+      await fn(items[i]!);
+    }
+  });
+  await Promise.all(workers);
 }
 
 async function safeFare(
@@ -196,7 +230,7 @@ function recomputeOptionVerdicts(opt: SplitOption): void {
 /** Ranking: within budget, then bookable, then cheapest, then fastest, direct first on ties. */
 function compareOptions(a: SplitOption, b: SplitOption): number {
   if (a.withinBudget !== b.withinBudget) return a.withinBudget ? -1 : 1;
-  if (a.bookable !== b.bookable) return a.bookable ? -1 : 1;
+  if (a.bookable !== b.bookable) return b.bookable ? 1 : -1;
   if (a.totalFare !== b.totalFare) return a.totalFare - b.totalFare;
   if (a.totalDurationMins !== b.totalDurationMins) return a.totalDurationMins - b.totalDurationMins;
   if (a.type !== b.type) return a.type === 'direct' ? -1 : 1;
@@ -221,11 +255,17 @@ export async function findOptions(
   const maxResults = query.maxResults ?? DEFAULT_MAX_RESULTS;
   const availabilityMode = query.availabilityMode ?? 'eager';
   const withAvailability = availabilityMode !== 'deferred';
+  const nowIst = istNow(Date.now());
+  const alreadyLeft = (date: string, depTime: string): boolean =>
+    query.excludeDeparted === true &&
+    date === nowIst.date &&
+    depMinutesOf(depTime) <= nowIst.mins;
 
   const options: SplitOption[] = [];
 
   // Direct trains first.
-  const directTrains = await provider.searchTrains(query.from, query.to, query.date);
+  const directTrains = (await provider.searchTrains(query.from, query.to, query.date))
+    .filter((t) => !alreadyLeft(query.date, t.depTime));
   for (const t of directTrains) {
     const leg = await buildLeg(provider, t, query.date, query.cls, quota, withAvailability);
     if (!leg) continue;
@@ -253,10 +293,12 @@ export async function findOptions(
     }
   }
   for (const hub of hubs) {
-    const leg1Trains = await provider.searchTrains(query.from, hub, query.date);
+    const leg1Trains = (await provider.searchTrains(query.from, hub, query.date))
+      .filter((t) => !alreadyLeft(query.date, t.depTime));
     for (let shift = 0; shift <= 1; shift += 1) {
       const date2 = addDaysISO(query.date, shift);
-      const leg2Trains = await provider.searchTrains(hub, query.to, date2);
+      const leg2Trains = (await provider.searchTrains(hub, query.to, date2))
+        .filter((t) => !alreadyLeft(date2, t.depTime));
       for (const t1 of leg1Trains) {
         for (const t2 of leg2Trains) {
           // Splitting one train's own journey into two tickets adds a fee and nothing else.
@@ -296,19 +338,28 @@ export async function findOptions(
   // the slice keep NOT_AVAILABLE and rank as unbookable.
   if (!withAvailability) {
     const refineCount = Math.min(deduped.length, Math.max(maxResults * 2, DEFERRED_REFINE_MIN));
-    for (const opt of deduped.slice(0, refineCount)) {
-      let changed = false;
+    const slice = deduped.slice(0, refineCount);
+    // One availability lookup per unique train+date: split options share legs,
+    // and the provider caches per train+date, so dedupe before the fan-out.
+    const unique = new Map<string, SplitLeg>();
+    for (const opt of slice) {
       for (const leg of opt.legs) {
-        const avail = await safeAvailability(
-          provider, leg.trainNumber, leg.from, leg.to, leg.date, query.cls, quota,
-        );
-        if (avail) {
-          leg.availability = avail;
-          changed = true;
-        }
+        const key = `${leg.trainNumber}|${leg.date}|${leg.from}|${leg.to}`;
+        if (!unique.has(key)) unique.set(key, leg);
       }
-      if (changed) recomputeOptionVerdicts(opt);
     }
+    const jobs = [...unique.values()];
+    let done = 0;
+    query.onProgress?.('checking_seats', 0, jobs.length);
+    await pMap(jobs, async (leg) => {
+      const avail = await safeAvailability(
+        provider, leg.trainNumber, leg.from, leg.to, leg.date, query.cls, quota,
+      );
+      if (avail) leg.availability = avail;
+      done += 1;
+      query.onProgress?.('checking_seats', done, jobs.length);
+    }, 4);
+    for (const opt of slice) recomputeOptionVerdicts(opt);
     deduped.sort(compareOptions);
   }
 
