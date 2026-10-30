@@ -10,6 +10,7 @@ import {
 const DEFAULT_MIN_CONNECTION = 90;
 const DEFAULT_MAX_CONNECTION = 480;
 const DEFAULT_MAX_RESULTS = 8;
+const DEFERRED_REFINE_MIN = 14;
 
 /** What the user asked the engine for. */
 export interface SplitQuery {
@@ -32,6 +33,13 @@ export interface SplitQuery {
   hubs?: string[];
   /** Cap on returned options. Default 8. */
   maxResults?: number;
+  /**
+   * 'eager' (default) fetches availability for every candidate, like the mock
+   * provider tests expect. 'deferred' builds fares-only options first, then
+   * fetches availability for the top slice only: the right mode for live
+   * providers where every call costs a network round trip.
+   */
+  availabilityMode?: 'eager' | 'deferred';
 }
 
 /** One booked segment of an option. */
@@ -133,11 +141,14 @@ async function buildLeg(
   date: string,
   cls: TrainClass,
   quota: Quota,
+  withAvailability = true,
 ): Promise<SplitLeg | null> {
   const fare = await safeFare(provider, t.number, t.from, t.to, cls, quota);
   if (fare === null) return null;
   const availability =
-    (await safeAvailability(provider, t.number, t.from, t.to, date, cls, quota)) ?? {
+    (withAvailability
+      ? await safeAvailability(provider, t.number, t.from, t.to, date, cls, quota)
+      : null) ?? {
       state: 'NOT_AVAILABLE' as const,
       count: 0,
     };
@@ -161,8 +172,6 @@ function makeOption(
   connectionMins: number | undefined,
 ): SplitOption {
   const totalFare = legs.reduce((sum, l) => sum + l.fare, 0);
-  const bookable = legs.every((l) => l.availability.state === 'AVAILABLE' || l.availability.state === 'RAC');
-  const needsWaitlist = legs.some((l) => l.availability.state === 'WL');
   return {
     type: hub === undefined ? 'direct' : 'split',
     legs,
@@ -171,10 +180,27 @@ function makeOption(
     totalFare,
     totalDurationMins,
     withinBudget: false,
-    bookable,
-    needsWaitlist,
+    bookable: false,
+    needsWaitlist: false,
     explanation: '',
   };
+}
+
+function recomputeOptionVerdicts(opt: SplitOption): void {
+  opt.bookable = opt.legs.every(
+    (l) => l.availability.state === 'AVAILABLE' || l.availability.state === 'RAC',
+  );
+  opt.needsWaitlist = opt.legs.some((l) => l.availability.state === 'WL');
+}
+
+/** Ranking: within budget, then bookable, then cheapest, then fastest, direct first on ties. */
+function compareOptions(a: SplitOption, b: SplitOption): number {
+  if (a.withinBudget !== b.withinBudget) return a.withinBudget ? -1 : 1;
+  if (a.bookable !== b.bookable) return a.bookable ? -1 : 1;
+  if (a.totalFare !== b.totalFare) return a.totalFare - b.totalFare;
+  if (a.totalDurationMins !== b.totalDurationMins) return a.totalDurationMins - b.totalDurationMins;
+  if (a.type !== b.type) return a.type === 'direct' ? -1 : 1;
+  return (a.hub ?? '').localeCompare(b.hub ?? '');
 }
 
 /**
@@ -193,26 +219,38 @@ export async function findOptions(
   const minConn = query.minConnectionMins ?? DEFAULT_MIN_CONNECTION;
   const maxConn = query.maxConnectionMins ?? DEFAULT_MAX_CONNECTION;
   const maxResults = query.maxResults ?? DEFAULT_MAX_RESULTS;
+  const availabilityMode = query.availabilityMode ?? 'eager';
+  const withAvailability = availabilityMode !== 'deferred';
 
   const options: SplitOption[] = [];
 
   // Direct trains first.
   const directTrains = await provider.searchTrains(query.from, query.to, query.date);
   for (const t of directTrains) {
-    const leg = await buildLeg(provider, t, query.date, query.cls, quota);
+    const leg = await buildLeg(provider, t, query.date, query.cls, quota, withAvailability);
     if (!leg) continue;
     const opt = makeOption([leg], t.durationMins, undefined, undefined);
+    recomputeOptionVerdicts(opt);
     opt.explanation = `${t.number} ${t.name} direct, Rs ${leg.fare}`;
     options.push(opt);
   }
 
-  // Splits via hubs.
+  // Splits via hubs. A provider that knows its best vias supplies them; otherwise
+  // every known station is a candidate (mock seed scale).
   let hubs = query.hubs;
   if (!hubs) {
-    const stations = (await provider.listStations()) ?? [];
-    hubs = [...new Set(stations.map((s) => s.code))].filter(
-      (c) => c !== query.from && c !== query.to,
-    );
+    const suggested =
+      typeof provider.suggestHubs === 'function'
+        ? await provider.suggestHubs(query.from, query.to)
+        : null;
+    if (suggested && suggested.length > 0) {
+      hubs = suggested.filter((c) => c !== query.from && c !== query.to).slice(0, 8);
+    } else {
+      const stations = (await provider.listStations()) ?? [];
+      hubs = [...new Set(stations.map((s) => s.code))].filter(
+        (c) => c !== query.from && c !== query.to,
+      );
+    }
   }
   for (const hub of hubs) {
     const leg1Trains = await provider.searchTrains(query.from, hub, query.date);
@@ -226,11 +264,12 @@ export async function findOptions(
           const dep2 = shift * 1440 + departureAbs(t2);
           const conn = dep2 - arrivalAbs(t1);
           if (conn < minConn || conn > maxConn) continue;
-          const leg1 = await buildLeg(provider, t1, query.date, query.cls, quota);
+          const leg1 = await buildLeg(provider, t1, query.date, query.cls, quota, withAvailability);
           if (!leg1) continue;
-          const leg2 = await buildLeg(provider, t2, date2, query.cls, quota);
+          const leg2 = await buildLeg(provider, t2, date2, query.cls, quota, withAvailability);
           if (!leg2) continue;
           const opt = makeOption([leg1, leg2], dep2 + t2.durationMins - departureAbs(t1), hub, conn);
+          recomputeOptionVerdicts(opt);
           opt.explanation = `Via ${hub}: ${t1.number} ${query.from}-${hub} + ${t2.number} ${hub}-${query.to}, Rs ${opt.totalFare}, ${fmtGap(conn)} at ${hub}`;
           options.push(opt);
         }
@@ -251,14 +290,27 @@ export async function findOptions(
     return true;
   });
 
-  deduped.sort((a, b) => {
-    if (a.withinBudget !== b.withinBudget) return a.withinBudget ? -1 : 1;
-    if (a.bookable !== b.bookable) return a.bookable ? -1 : 1;
-    if (a.totalFare !== b.totalFare) return a.totalFare - b.totalFare;
-    if (a.totalDurationMins !== b.totalDurationMins) return a.totalDurationMins - b.totalDurationMins;
-    if (a.type !== b.type) return a.type === 'direct' ? -1 : 1;
-    return (a.hub ?? '').localeCompare(b.hub ?? '');
-  });
+  deduped.sort(compareOptions);
+
+  // Deferred availability: refine the top slice only, then re-rank. Options below
+  // the slice keep NOT_AVAILABLE and rank as unbookable.
+  if (!withAvailability) {
+    const refineCount = Math.min(deduped.length, Math.max(maxResults * 2, DEFERRED_REFINE_MIN));
+    for (const opt of deduped.slice(0, refineCount)) {
+      let changed = false;
+      for (const leg of opt.legs) {
+        const avail = await safeAvailability(
+          provider, leg.trainNumber, leg.from, leg.to, leg.date, query.cls, quota,
+        );
+        if (avail) {
+          leg.availability = avail;
+          changed = true;
+        }
+      }
+      if (changed) recomputeOptionVerdicts(opt);
+    }
+    deduped.sort(compareOptions);
+  }
 
   const filtered = query.onlyWithinBudget ? deduped.filter((o) => o.withinBudget) : deduped;
   return filtered.slice(0, maxResults);
