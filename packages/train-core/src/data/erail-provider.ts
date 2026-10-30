@@ -32,6 +32,8 @@ export interface ErailProviderConfig {
   baseUrl?: string;
   /** Minimum gap between upstream calls. Default 250ms. */
   minIntervalMs?: number;
+  /** Max concurrent upstream fetches. 1 keeps strict ordering; browsers can raise it. */
+  maxConcurrency?: number;
   /** Trains-between-stations response cache. Default 30 minutes. */
   betweenTtlMs?: number;
   /** Per-train availability cache (date-keyed). Default 90 seconds. */
@@ -109,6 +111,7 @@ function weekdayOf(date: string): Weekday {
 export class ErailProvider implements TrainDataProvider {
   private readonly base: string;
   private readonly minIntervalMs: number;
+  private readonly maxConcurrency: number;
   private readonly betweenTtlMs: number;
   private readonly trainInfoTtlMs: number;
   private readonly routeTtlMs: number;
@@ -125,11 +128,15 @@ export class ErailProvider implements TrainDataProvider {
   private stations: Station[];
   private readonly cache = new Map<string, CacheEntry<unknown>>();
   private readonly legInfo = new Map<string, { info: LegInfo; expiresAt: number }>();
-  private queue: Promise<void> = Promise.resolve();
+  /** Bounded-concurrency fetch pool: at most maxConcurrency calls in flight. */
+  private inFlight = 0;
+  private lastStart = 0;
+  private readonly waiters: (() => void)[] = [];
 
   constructor(config: ErailProviderConfig = {}) {
     this.base = (config.baseUrl ?? 'https://erail.in').replace(/\/$/, '');
     this.minIntervalMs = config.minIntervalMs ?? 250;
+    this.maxConcurrency = config.maxConcurrency ?? 1;
     this.betweenTtlMs = config.betweenTtlMs ?? 30 * 60_000;
     this.trainInfoTtlMs = config.trainInfoTtlMs ?? 90_000;
     this.routeTtlMs = config.routeTtlMs ?? 24 * 60 * 60_000;
@@ -199,14 +206,15 @@ export class ErailProvider implements TrainDataProvider {
     return fare;
   }
 
-  async getAvailability(
+  /**
+   * Every class's seat status for one train+date, from a single erail lookup.
+   * One call serves the whole UI: the engine's selected-class chip and the
+   * class-wise availability table both read this cache.
+   */
+  async getAvailabilityAll(
     trainNo: string,
-    _from: string,
-    _to: string,
     date: string,
-    cls: TrainClass,
-    _quota: Quota,
-  ): Promise<Availability> {
+  ): Promise<Partial<Record<string, Availability>>> {
     const key = `avail:${trainNo}:${date}`;
     const body = await this.getText(
       `${this.base}/rail/getTrains.aspx?TrainNo=${encodeURIComponent(trainNo)}&DataSource=0&Language=0&Cache=true&DateOfJourney=${encodeURIComponent(this.ddmmyyyy(date))}`,
@@ -217,18 +225,44 @@ export class ErailProvider implements TrainDataProvider {
     if (!rec) throw new ProviderError('no_route', `Train ${trainNo} not found.`);
     const availField = rec.split('~').find((v) => /^[0-9A-Z]{1,3}:.*\|/.test(v));
     if (!availField) throw new ProviderError('no_seats', `No availability data for train ${trainNo}.`);
+    const out: Partial<Record<string, Availability>> = {};
     for (const entry of availField.split('|')) {
       const p = entry.split(':');
-      if (p[0]?.trim() !== cls) continue;
+      const cls = p[0]?.trim();
+      if (!cls) continue;
       const available = Number(p[2]) || 0;
       const rac = Number(p[3]) || 0;
       const wl = Number(p[4]) || 0;
-      if (available > 0) return { state: 'AVAILABLE', count: available };
-      if (rac > 0) return { state: 'RAC', count: rac };
-      if (wl > 0) return { state: 'WL', count: wl, wlPrefix: `GNWL${wl}` };
-      return { state: 'NOT_AVAILABLE', count: 0 };
+      if (available > 0) out[cls] = { state: 'AVAILABLE', count: available };
+      else if (rac > 0) out[cls] = { state: 'RAC', count: rac };
+      else if (wl > 0) out[cls] = { state: 'WL', count: wl, wlPrefix: `GNWL${wl}` };
+      else out[cls] = { state: 'NOT_AVAILABLE', count: 0 };
     }
-    throw new ProviderError('no_seats', `Train ${trainNo} offers no ${cls}.`);
+    if (Object.keys(out).length === 0) {
+      throw new ProviderError('no_seats', `No availability data for train ${trainNo}.`);
+    }
+    return out;
+  }
+
+  async getAvailability(
+    trainNo: string,
+    _from: string,
+    _to: string,
+    date: string,
+    cls: TrainClass,
+    _quota: Quota,
+  ): Promise<Availability> {
+    const all = await this.getAvailabilityAll(trainNo, date);
+    const hit = all[cls];
+    if (!hit) throw new ProviderError('no_seats', `Train ${trainNo} offers no ${cls}.`);
+    return hit;
+  }
+
+  /** Cached per-class fares for a leg; no network call. Empty when uncached. */
+  getFareTable(trainNo: string, from: string, to: string): Partial<Record<string, number>> {
+    const hit = this.legInfo.get(`${trainNo}|${from.toUpperCase()}|${to.toUpperCase()}`);
+    if (!hit || hit.expiresAt <= this.now()) return {};
+    return { ...hit.info.fares };
   }
 
   async getRoute(trainNo: string): Promise<Stop[]> {
@@ -325,9 +359,28 @@ export class ErailProvider implements TrainDataProvider {
     return [...ok, ...cooling];
   }
 
+  /** Slot manager: at most maxConcurrency fetches in flight. */
+  private acquire(): Promise<void> {
+    if (this.inFlight < this.maxConcurrency) {
+      this.inFlight += 1;
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => this.waiters.push(resolve));
+  }
+
+  /** Hands the freed slot to the next waiter, keeping the pool size. */
+  private release(): void {
+    const next = this.waiters.shift();
+    if (next) next();
+    else this.inFlight -= 1;
+  }
+
   private async throttledFetch(url: string): Promise<string> {
-    const run = this.queue.then(async () => {
-      await sleep(this.minIntervalMs);
+    await this.acquire();
+    const start = Math.max(this.lastStart + this.minIntervalMs, this.now());
+    this.lastStart = start;
+    try {
+      await sleep(Math.max(0, start - this.now()));
       const wraps = this.proxyFallbacks ?? [];
       const chain: { target: string; wrap: number | null }[] = [];
       const relays = this.relayOrder();
@@ -352,7 +405,7 @@ export class ErailProvider implements TrainDataProvider {
       let lastErr: unknown;
       for (const { target, wrap } of chain) {
         try {
-          const text = await this.doFetch(target);
+          const text = await this.doFetchWithRetry(target);
           if (wrap !== null) {
             this.proxyCursor = (wrap + 1) % wraps.length;
             this.proxyCooldown[wrap] = 0;
@@ -364,12 +417,25 @@ export class ErailProvider implements TrainDataProvider {
         }
       }
       throw lastErr;
-    });
-    this.queue = run.then(
-      () => undefined,
-      () => undefined,
-    );
-    return run;
+    } finally {
+      this.release();
+    }
+  }
+
+  /** Retries a relayed fetch when the relay rate-limits us (HTTP 429). */
+  private async doFetchWithRetry(target: string): Promise<string> {
+    let err: unknown = new ProviderError('provider_down', 'no attempt made');
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        return await this.doFetch(target);
+      } catch (e) {
+        err = e;
+        const retryable = e instanceof ProviderError && /\b429\b/.test(e.message);
+        if (!retryable || attempt === 2) break;
+        await sleep(10_000 * (attempt + 1));
+      }
+    }
+    throw err;
   }
 
   private async doFetch(target: string): Promise<string> {
