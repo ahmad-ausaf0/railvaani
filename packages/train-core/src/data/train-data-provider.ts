@@ -40,4 +40,12 @@ export interface TrainDataProvider {
    * instead of enumerating every known station. Falls back to listStations().
    */
   suggestHubs?(from: string, to: string): Promise<string[]>;
+  /**
+   * Optional: every class's seat status for one train+date in a single lookup.
+   * Providers whose availability endpoint returns all classes at once should
+   * implement this; the UI's class-wise availability table reads it.
+   */
+  getAvailabilityAll?(trainNo: string, date: string): Promise<Partial<Record<string, Availability>>>;
+  /** Optional: cached per-class fares for a leg, with no network call. */
+  getFareTable?(trainNo: string, from: string, to: string): Partial<Record<string, number>>;
 }
