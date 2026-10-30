@@ -13,6 +13,7 @@ import { ProviderError, TrainDataProvider } from './train-data-provider';
 
 /** Deterministic per-km rates and reservation fees, tuned to realistic IRCTC levels. */
 const FARE_RATE_PER_KM: Record<TrainClass, number> = {
+  '1A': 4,
   '2S': 0.32,
   SL: 0.56,
   CC: 1.45,
@@ -21,6 +22,7 @@ const FARE_RATE_PER_KM: Record<TrainClass, number> = {
   '2A': 2.15,
 };
 const RESERVATION_FEE: Record<TrainClass, number> = {
+  '1A': 60,
   '2S': 15,
   SL: 20,
   CC: 40,
