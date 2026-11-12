@@ -5,6 +5,7 @@ import { SplitOption } from '@railvaani/split-engine';
 
 import { RailService } from './services/rail.service';
 import { StationsService } from './services/stations.service';
+import { VoiceIntentService } from './services/voice-intent.service';
 import { ClassDetail, OptionCardComponent } from './components/option-card.component';
 import { StationInputComponent } from './components/station-input.component';
 
@@ -217,6 +218,7 @@ const IRCTC_URL = 'https://www.irctc.co.in/nget/train-search';
 export class AppComponent implements OnInit {
   private readonly rail = inject(RailService);
   readonly stations = inject(StationsService);
+  private readonly voiceIntent = new VoiceIntentService();
 
   readonly classes: TrainClass[] = ['SL', '3A', '3E', '2A', '1A', 'CC', '2S'];
   readonly sorts = [
@@ -426,18 +428,22 @@ export class AppComponent implements OnInit {
     this.voiceNote.set('');
     rec.onresult = (e: SpeechEvent) => {
       const said = e.results[0]?.[0]?.transcript ?? '';
-      const m = said.match(/(?:from\\s+)?(.+?)\\s+(?:to|se|\u0938\u0947)\\s+(.+)$/i);
-      if (m?.[1] && m?.[2]) {
-        const f = this.stations.resolve(m[1].trim());
-        const t = this.stations.resolve(m[2].trim());
-        this.fromText.set(f?.name ?? m[1].trim());
-        this.fromCode.set(f?.code ?? null);
-        this.toText.set(t?.name ?? m[2].trim());
-        this.toCode.set(t?.code ?? null);
+      const intent = this.voiceIntent.parse(said, this.stations.stations());
+      if (intent.from && intent.to) {
+        this.fromText.set(intent.from.name);
+        this.fromCode.set(intent.from.code);
+        this.toText.set(intent.to.name);
+        this.toCode.set(intent.to.code);
         this.voiceNote.set(`Heard: ${said}`);
         void this.search();
+      } else if (intent.from) {
+        this.fromText.set(intent.from.name);
+        this.fromCode.set(intent.from.code);
+        this.voiceNote.set(`Got ${intent.from.name}. Say the station you are going to as well.`);
       } else {
-        this.voiceNote.set(`Heard "${said}". Say it as: Gorakhpur to New Delhi.`);
+        this.voiceNote.set(
+          `I heard: ${said}. Try saying two station names, like Gorakhpur to New Delhi.`,
+        );
       }
     };
     rec.onerror = (err) => {
