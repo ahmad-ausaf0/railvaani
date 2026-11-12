@@ -155,7 +155,13 @@ const IRCTC_URL = 'https://www.irctc.co.in/nget/train-search';
                 {{ s.label }}
               </button>
             }
-          </div>
+            @if (partialNote()) {
+            <p class="mt-2 text-xs text-slate-500 dark:text-slate-400" role="status">
+              Some options could not be checked.
+            </p>
+          }
+        </div>
+
           <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
             Schedules and fares live from Indian Railways data. Availability comes from ConfirmTkt's cache and can
             lag IRCTC by a few hours; each figure carries its snapshot time. Booking happens on IRCTC.
@@ -228,6 +234,7 @@ export class AppComponent implements OnInit {
   readonly listening = signal(false);
   readonly results = signal<SplitOption[] | null>(null);
   readonly error = signal('');
+  readonly partialNote = signal(false);
   readonly voiceNote = signal('');
   readonly sort = signal<'best' | 'cheapest' | 'fastest'>('best');
   readonly progressStage = signal<'searching' | 'checking_seats'>('searching');
@@ -300,6 +307,7 @@ export class AppComponent implements OnInit {
     this.fromCode.set(from);
     this.toCode.set(to);
     this.error.set('');
+    this.partialNote.set(false);
     this.results.set(null);
     this.classDetails.set({});
     this.searching.set(true);
@@ -327,9 +335,14 @@ export class AppComponent implements OnInit {
         this.error.set('No trains found for this route, class and date. Try another class or date.');
       }
       void this.loadClassDetails(opts);
-    } catch (e) {
-      this.results.set(null);
-      this.error.set(e instanceof Error ? e.message : 'Something went wrong. Please try again.');
+    } catch {
+      // Never surface an exception's raw message. Results already on screen stay.
+      this.error.set('Train data could not be reached. Check your connection and try again.');
+      if ((this.results()?.length ?? 0) > 0) {
+        this.partialNote.set(true);
+      } else {
+        this.results.set(null);
+      }
     } finally {
       clearInterval(tick);
       this.searching.set(false);

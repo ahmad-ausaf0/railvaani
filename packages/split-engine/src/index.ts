@@ -148,6 +148,9 @@ async function safeFare(
     return await provider.getFare(trainNo, from, to, cls, quota);
   } catch (e) {
     if (e instanceof ProviderError) return null;
+    // A raw TypeError is a network failure. Providers should convert it, but the
+    // engine defends too: the leg simply has no fare.
+    if (e instanceof TypeError) return null;
     throw e;
   }
 }
@@ -165,6 +168,9 @@ async function safeAvailability(
     return await provider.getAvailability(trainNo, from, to, date, cls, quota);
   } catch (e) {
     if (e instanceof ProviderError) return null;
+    // A raw TypeError is a network failure. Providers should convert it, but the
+    // engine defends too: the seats count as unchecked, not fatal.
+    if (e instanceof TypeError) return null;
     throw e;
   }
 }
@@ -279,12 +285,21 @@ export async function findOptions(
   // every known station is a candidate (mock seed scale).
   let hubs = query.hubs;
   if (!hubs) {
-    const suggested =
-      typeof provider.suggestHubs === 'function'
-        ? await provider.suggestHubs(query.from, query.to)
-        : null;
+    let suggested: string[] | null = null;
+    let suggestFailed = false;
+    if (typeof provider.suggestHubs === 'function') {
+      try {
+        suggested = await provider.suggestHubs(query.from, query.to);
+      } catch {
+        suggestFailed = true;
+      }
+    }
     if (Array.isArray(suggested) && suggested.length > 0) {
       hubs = suggested.filter((c) => c !== query.from && c !== query.to).slice(0, 8);
+    } else if (suggestFailed) {
+      // Hub suggestions are an enhancement. When they fail, run direct trains
+      // only rather than enumerating every known station as a hub.
+      hubs = [];
     } else {
       const stations = (await provider.listStations()) ?? [];
       hubs = [...new Set(stations.map((s) => s.code))].filter(
@@ -293,32 +308,38 @@ export async function findOptions(
     }
   }
   for (const hub of hubs) {
-    const leg1Trains = (await provider.searchTrains(query.from, hub, query.date))
-      .filter((t) => !alreadyLeft(query.date, t.depTime));
-    for (let shift = 0; shift <= 1; shift += 1) {
-      const date2 = addDaysISO(query.date, shift);
-      const leg2Trains = (await provider.searchTrains(hub, query.to, date2))
-        .filter((t) => !alreadyLeft(date2, t.depTime));
-      for (const t1 of leg1Trains) {
-        for (const t2 of leg2Trains) {
-          // Splitting one train's own journey into two tickets adds a fee and nothing else.
-          if (t1.number === t2.number) continue;
-          const dep2 = shift * 1440 + departureAbs(t2);
-          const conn = dep2 - arrivalAbs(t1);
-          if (conn < minConn || conn > maxConn) continue;
-          const leg1 = await buildLeg(provider, t1, query.date, query.cls, quota, withAvailability);
-          if (!leg1) continue;
-          const leg2 = await buildLeg(provider, t2, date2, query.cls, quota, withAvailability);
-          if (!leg2) continue;
-          const opt = makeOption([leg1, leg2], dep2 + t2.durationMins - departureAbs(t1), hub, conn);
-          recomputeOptionVerdicts(opt);
-          opt.explanation = `Via ${hub}: ${t1.number} ${query.from}-${hub} + ${t2.number} ${hub}-${query.to}, Rs ${opt.totalFare}, ${fmtGap(conn)} at ${hub}`;
-          options.push(opt);
+    // One hub failing (its searches, fares or seat checks) must not affect
+    // other hubs or the direct results: skip it and carry on.
+    try {
+      const leg1Trains = (await provider.searchTrains(query.from, hub, query.date))
+        .filter((t) => !alreadyLeft(query.date, t.depTime));
+      for (let shift = 0; shift <= 1; shift += 1) {
+        const date2 = addDaysISO(query.date, shift);
+        const leg2Trains = (await provider.searchTrains(hub, query.to, date2))
+          .filter((t) => !alreadyLeft(date2, t.depTime));
+        for (const t1 of leg1Trains) {
+          for (const t2 of leg2Trains) {
+            // Splitting one train's own journey into two tickets adds a fee and nothing else.
+            if (t1.number === t2.number) continue;
+            const dep2 = shift * 1440 + departureAbs(t2);
+            const conn = dep2 - arrivalAbs(t1);
+            if (conn < minConn || conn > maxConn) continue;
+            const leg1 = await buildLeg(provider, t1, query.date, query.cls, quota, withAvailability);
+            if (!leg1) continue;
+            const leg2 = await buildLeg(provider, t2, date2, query.cls, quota, withAvailability);
+            if (!leg2) continue;
+            const opt = makeOption([leg1, leg2], dep2 + t2.durationMins - departureAbs(t1), hub, conn);
+            recomputeOptionVerdicts(opt);
+            opt.explanation = `Via ${hub}: ${t1.number} ${query.from}-${hub} + ${t2.number} ${hub}-${query.to}, Rs ${opt.totalFare}, ${fmtGap(conn)} at ${hub}`;
+            options.push(opt);
+          }
         }
       }
+
+    } catch {
+      continue;
     }
   }
-
   const budget = query.budgetPerHead;
   for (const opt of options) {
     opt.withinBudget = budget === undefined ? true : opt.totalFare <= budget;

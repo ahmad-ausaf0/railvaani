@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { MockTrainProvider } from '@railvaani/train-core';
+import { Availability, MockTrainProvider } from '@railvaani/train-core';
 
 import { findOptions, SplitOption } from './index';
 
@@ -111,4 +111,49 @@ test('same-origin query throws', async () => {
     () => findOptions(p, { from: 'GKP', to: 'GKP', date: DATE, cls: 'SL' }),
     /must differ/,
   );
+});
+
+/** SuggestHubs raises a raw network error, the way a failed fetch does. */
+class HubSuggestionsThrow extends MockTrainProvider {
+  suggestHubs(): Promise<string[]> {
+    return Promise.reject(new TypeError('Failed to fetch'));
+  }
+}
+
+/** getAvailability raises a raw network error, the way a failed fetch does. */
+class AvailabilityThrow extends MockTrainProvider {
+  async getAvailability(): Promise<Availability> {
+    throw new TypeError('Failed to fetch');
+  }
+}
+
+test('a provider whose hub suggestions fail still returns direct options', async () => {
+  const opts = await findOptions(new HubSuggestionsThrow(), {
+    from: 'GKP',
+    to: 'NDLS',
+    date: DATE,
+    cls: 'SL',
+    maxResults: 40,
+  });
+  const direct = opts.filter((o) => o.type === 'direct');
+  assert.equal(direct.length, 5);
+  assert.equal(opts.filter((o) => o.type === 'split').length, 0);
+});
+
+test('a provider whose availability check throws a network error still returns options with seats unchecked', async () => {
+  const opts = await findOptions(new AvailabilityThrow(), {
+    from: 'GKP',
+    to: 'NDLS',
+    date: DATE,
+    cls: 'SL',
+    maxResults: 40,
+  });
+  assert.ok(opts.length > 0);
+  for (const o of opts) {
+    for (const leg of o.legs) {
+      assert.equal(leg.availability.state, 'NOT_AVAILABLE');
+      assert.equal(leg.availability.count, 0);
+    }
+    assert.equal(o.bookable, false);
+  }
 });

@@ -421,7 +421,11 @@ export class ErailProvider implements TrainDataProvider {
           if (wrap !== null) this.proxyCooldown[wrap] = this.now() + 90_000;
         }
       }
-      throw lastErr;
+      // Every network failure leaves as a ProviderError: a raw TypeError
+      // (browser "Failed to fetch") must never escape.
+      throw lastErr instanceof ProviderError
+        ? lastErr
+        : new ProviderError('provider_down', 'Erail: network request failed.');
     } finally {
       this.release();
     }

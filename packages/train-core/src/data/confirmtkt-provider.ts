@@ -456,7 +456,12 @@ export class ConfirmTktProvider implements TrainDataProvider {
         return json;
       } catch (e) {
         if (e instanceof ProviderError && e.kind !== 'provider_down') throw e;
-        lastErr = e;
+        // Every network failure leaves as a ProviderError: a raw TypeError
+        // (browser "Failed to fetch", a JSON parse failure) must never escape.
+        lastErr =
+          e instanceof ProviderError
+            ? e
+            : new ProviderError('provider_down', `${label}: network request failed.`);
         if (attempt === 1) break;
         await sleep(1500);
       } finally {
