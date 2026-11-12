@@ -27,7 +27,7 @@ body {
 
 /* Touch targets at least 48px for primary controls (WCAG 2.5.8). */
 button, a, input, select {
-  min-height: 44px;
+  min-height: 48px;
 }
 a.chip, span.chip { min-height: 0; }
 

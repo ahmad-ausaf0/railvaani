@@ -69,16 +69,24 @@ const IRCTC_URL = 'https://www.irctc.co.in/nget/train-search';
         </button>
         @if (voiceNote()) { <p class="mb-3 rounded-lg bg-slate-100 px-3 py-2 text-xs text-slate-600 dark:bg-slate-800 dark:text-slate-300" role="status">{{ voiceNote() }}</p> }
 
-        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <rv-station-input
-            id="from"
-            label="From"
-            [(text)]="fromText"
-            [(code)]="fromCode"
-            [suggestions]="fromSuggest()"
-            (queryChange)="onFromQuery($event)"
-          />
-          <div class="relative sm:order-3">
+        <div class="grid gap-3">
+          <div class="grid gap-3 sm:grid-cols-[1fr_auto_1fr] sm:items-end">
+            <rv-station-input
+              id="from"
+              label="From"
+              [(text)]="fromText"
+              [(code)]="fromCode"
+              [suggestions]="fromSuggest()"
+              (queryChange)="onFromQuery($event)"
+            />
+            <button
+              type="button"
+              (click)="swap()"
+              aria-label="Swap origin and destination"
+              class="flex h-12 w-12 items-center justify-center justify-self-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition hover:text-indigo-600 dark:border-slate-700 dark:bg-slate-900"
+            >
+              <svg aria-hidden="true" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 16V4m0 0L4 7m3-3 3 3m7 4v12m0 0 3-3m-3 3-3-3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
             <rv-station-input
               id="to"
               label="To"
@@ -87,29 +95,24 @@ const IRCTC_URL = 'https://www.irctc.co.in/nget/train-search';
               [suggestions]="toSuggest()"
               (queryChange)="onToQuery($event)"
             />
-            <button
-              type="button"
-              (click)="swap()"
-              aria-label="Swap origin and destination"
-              class="absolute -top-3 right-2 z-10 hidden rounded-full border border-slate-200 bg-white p-1.5 text-slate-500 shadow-sm transition hover:text-indigo-600 sm:block dark:border-slate-700 dark:bg-slate-900"
-            >
-              <svg aria-hidden="true" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 16V4m0 0L4 7m3-3 3 3m7 4v12m0 0 3-3m-3 3-3-3" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            </button>
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label for="date" class="block text-sm font-semibold text-slate-600 dark:text-slate-300">Journey date</label>
+              <input id="date" type="date" [value]="date()" [min]="minDate" (change)="date.set(d.value)" #d
+                class="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-base text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
+            </div>
+            <div>
+              <label for="cls" class="block text-sm font-semibold text-slate-600 dark:text-slate-300">Class</label>
+              <select id="cls" [value]="cls()" (change)="setCls(c.value)" #c
+                class="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-base text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
+                @for (cl of classes; track cl) { <option [value]="cl">{{ classLabel(cl) }}</option> }
+              </select>
+            </div>
           </div>
 
           <div>
-            <label for="date" class="block text-sm font-semibold text-slate-600 dark:text-slate-300">Journey date</label>
-            <input id="date" type="date" [value]="date()" [min]="minDate" (change)="date.set(d.value)" #d
-              class="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-base text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
-          </div>
-          <div>
-            <label for="cls" class="block text-sm font-semibold text-slate-600 dark:text-slate-300">Class</label>
-            <select id="cls" [value]="cls()" (change)="setCls(c.value)" #c
-              class="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-base text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
-              @for (cl of classes; track cl) { <option [value]="cl">{{ classLabel(cl) }}</option> }
-            </select>
-          </div>
-          <div class="sm:col-span-2">
             <label for="budget" class="block text-sm font-semibold text-slate-600 dark:text-slate-300">Budget per person (&#8377;, optional)</label>
             <input id="budget" type="number" min="0" inputmode="numeric" placeholder="e.g. 600" [value]="budget()" (input)="budget.set(b.value)" #b
               class="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-base text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
@@ -131,7 +134,7 @@ const IRCTC_URL = 'https://www.irctc.co.in/nget/train-search';
         <div class="mt-3 flex flex-wrap gap-2">
           @for (ex of examples; track ex[0]) {
             <button type="button" (click)="tryExample(ex[0], ex[1])"
-              class="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:border-indigo-300 hover:text-indigo-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+              class="inline-flex min-h-[48px] items-center rounded-full border border-slate-200 bg-slate-50 px-4 text-xs font-medium text-slate-600 transition hover:border-indigo-300 hover:text-indigo-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
               {{ ex[0] }} &rarr; {{ ex[1] }}
             </button>
           }
