@@ -74,6 +74,7 @@ const IRCTC_URL = 'https://www.irctc.co.in/nget/train-search';
             id="from"
             label="From"
             [(text)]="fromText"
+            [(code)]="fromCode"
             [suggestions]="fromSuggest()"
             (queryChange)="onFromQuery($event)"
           />
@@ -82,6 +83,7 @@ const IRCTC_URL = 'https://www.irctc.co.in/nget/train-search';
               id="to"
               label="To"
               [(text)]="toText"
+              [(code)]="toCode"
               [suggestions]="toSuggest()"
               (queryChange)="onToQuery($event)"
             />
