@@ -1,35 +1,46 @@
 @import "tailwindcss";
 
-/* RailVaani design tokens + accessibility baselines. */
+/* RailVaani: Indian railway signage + paper ticket stub.
+   One dominant colour (signage blue), one accent, warm paper neutrals.
+   No gradients anywhere; the dark indigo theme was removed with the redesign. */
 :root {
-  --rv-font-size: 18px;
-  --rv-color-bg: #ffffff;
-  --rv-color-text: #1a1a1a;
-  --rv-focus-outline: 3px solid #b35c00;
+  --font-display: "Rozha One", serif;
+  --font-body: "Mukta", "Noto Sans Devanagari", sans-serif;
+
+  --paper: #FAF4E8;
+  --card: #FFFDF8;
+  --ink: #20242B;
+  --ink-soft: #5A5F6A;
+  --board: #17457A;
+  --board-deep: #10345C;
+  --accent: #E39A2D;
+  --green: #2E7D46;
+  --amber: #B97A0F;
+  --red: #C0392B;
+  --line: #E4DCC8;
+  /* #B97A0F reads 3.5:1 against --card, under the 4.5:1 floor, so text and
+     borders that carry meaning use this darkened amber instead (5.8:1). */
+  --amber-ink: #8A5A08;
+  --tint: #EAF1F9;
+  --shadow-soft: 0 1px 2px rgba(32, 36, 43, 0.05), 0 6px 18px rgba(32, 36, 43, 0.07);
 }
 
-html { font-size: var(--rv-font-size); }
+html { font-size: 18px; }
 
 body {
   margin: 0;
-  font-family: system-ui, 'Noto Sans', 'Noto Sans Devanagari', sans-serif;
-  color: var(--rv-color-text);
-  background: var(--rv-color-bg);
+  font-family: var(--font-body);
+  color: var(--ink);
+  background: var(--paper);
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
 
-/* Visible focus for every interactive element: 3px, at least 3:1 against the page. */
-:focus-visible {
-  outline: var(--rv-focus-outline);
-  outline-offset: 2px;
-}
+/* Visible focus for every interactive element: 3px, high contrast on paper. */
+:focus-visible { outline: 3px solid var(--board); outline-offset: 2px; }
 
 /* Touch targets at least 48px for primary controls (WCAG 2.5.8). */
-button, a, input, select {
-  min-height: 48px;
-}
-a.chip, span.chip { min-height: 0; }
+button, a, input, select { min-height: 48px; }
 
 .skip-link {
   position: absolute; left: -999px; top: 0;
@@ -37,6 +48,192 @@ a.chip, span.chip { min-height: 0; }
   border-radius: 0 0 8px 0;
 }
 .skip-link:focus { left: 8px; top: 8px; }
+
+/* ---------- header: solid signage bar ---------- */
+.rv-header { background: var(--board); color: #fff; }
+.rv-logo {
+  display: grid; place-items: center; width: 44px; height: 44px;
+  border-radius: 10px; background: #fff; color: var(--board); flex: none;
+}
+.rv-wordmark { margin: 0; font-family: var(--font-display); font-weight: 400; font-size: 1.4rem; line-height: 1.15; }
+.rv-tagline { margin: 0; font-size: 0.72rem; font-weight: 600; color: #A9C6E8; }
+.rv-header-note { margin: 0; font-size: 0.75rem; color: #A9C6E8; }
+
+/* ---------- shared surfaces ---------- */
+.rv-card {
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: 14px; box-shadow: var(--shadow-soft);
+}
+.t-ink { color: var(--ink); }
+.t-soft { color: var(--ink-soft); }
+
+.rv-note {
+  background: var(--paper); border: 1px solid var(--line); color: var(--ink-soft);
+  border-radius: 10px; padding: 0.5rem 0.75rem; font-size: 0.8rem; margin: 0 0 0.75rem;
+}
+
+/* ---------- voice button ---------- */
+.rv-voice {
+  gap: 0.75rem; border: 2px dashed var(--board); background: var(--tint);
+  color: var(--board-deep); border-radius: 10px; padding: 0.55rem 1rem;
+  font-weight: 700; width: 100%; text-align: left;
+}
+.rv-voice:hover { background: #DFEAF6; }
+.rv-voice-disc {
+  display: grid; place-items: center; width: 38px; height: 38px;
+  border-radius: 50%; background: var(--board); color: #fff; flex: none;
+}
+
+/* ---------- form ---------- */
+.rv-label { display: block; font-size: 0.8rem; font-weight: 700; color: var(--ink-soft); letter-spacing: 0.02em; }
+.rv-input {
+  margin-top: 0.25rem; width: 100%; border: 1px solid var(--line); background: #fff; color: var(--ink);
+  border-radius: 10px; padding: 0.6rem 0.85rem; font-size: 1rem; font-family: var(--font-body);
+}
+.rv-input::placeholder { color: var(--ink-soft); }
+.rv-input:focus { outline: none; border-color: var(--board); box-shadow: 0 0 0 3px rgba(23, 69, 122, 0.15); }
+.rv-badge {
+  background: var(--board); color: #fff; font-weight: 800; font-size: 0.68rem;
+  padding: 0.15rem 0.55rem; border-radius: 999px; letter-spacing: 0.04em;
+}
+.rv-primary {
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem; width: 100%;
+  background: var(--board); color: #fff; font-weight: 800; font-size: 1rem;
+  border-radius: 10px; padding: 0.75rem 1rem; border: 0;
+}
+.rv-primary:hover { background: var(--board-deep); }
+.rv-primary:disabled { opacity: 0.6; }
+.rv-chip {
+  display: inline-flex; align-items: center; min-height: 48px; padding: 0 1rem; border-radius: 999px;
+  background: #fff; border: 1px solid var(--line); color: var(--ink-soft);
+  font-size: 0.8rem; font-weight: 600;
+}
+.rv-chip:hover { border-color: var(--board); color: var(--board); }
+.rv-swap {
+  display: grid; place-items: center; width: 48px; height: 48px; border-radius: 999px;
+  border: 1px solid var(--line); background: #fff; color: var(--ink-soft); justify-self: center;
+}
+.rv-swap:hover { color: var(--board); border-color: var(--board); }
+
+/* ---------- results ---------- */
+.rv-results-title { margin: 0; font-family: var(--font-display); font-weight: 400; font-size: 1.2rem; color: var(--ink); }
+.rv-section { margin: 0.25rem 0 0; font-family: var(--font-display); font-weight: 400; font-size: 1.05rem; color: var(--board-deep); }
+.rv-sort {
+  border-radius: 999px; padding: 0.3rem 0.85rem; font-size: 0.78rem; font-weight: 700;
+  background: #fff; border: 1px solid var(--line); color: var(--ink-soft);
+}
+.rv-sort:hover { border-color: var(--ink-soft); }
+.rv-sort-active { background: var(--ink); border-color: var(--ink); color: #fff; }
+.rv-fineprint { font-size: 0.72rem; color: var(--ink-soft); }
+.rv-empty { padding: 1rem 1.25rem; font-size: 0.85rem; color: var(--ink-soft); }
+.rv-error { border-left: 4px solid var(--red); }
+.rv-retry {
+  border: 1.5px solid var(--red); color: var(--red); background: #fff;
+  border-radius: 10px; padding: 0.3rem 0.8rem; font-weight: 800; font-size: 0.8rem;
+}
+.rv-footer { border-top: 1px solid var(--line); color: var(--ink-soft); }
+
+/* ---------- ticket stub ---------- */
+.rv-ticket { padding: 18px 20px; }
+.rv-ticket-split { padding: 0; }
+.rv-ticket-body { padding: 12px 20px 18px; }
+.rv-train-no {
+  margin: 0; font-family: var(--font-display); font-weight: 400;
+  font-size: 26px; line-height: 1.1; color: var(--board-deep); font-variant-numeric: tabular-nums;
+}
+.rv-train-no-sm {
+  font-family: var(--font-display); font-weight: 400; font-size: 1.05rem;
+  color: var(--board-deep); font-variant-numeric: tabular-nums;
+}
+.rv-train-name { margin: 0.1rem 0 0; font-size: 1rem; font-weight: 700; color: var(--ink); }
+.rv-fare { margin: 0; font-size: 23px; font-weight: 800; line-height: 1.1; color: var(--ink); font-variant-numeric: tabular-nums; }
+.rv-fare-per { margin: 0; font-size: 0.7rem; color: var(--ink-soft); }
+.rv-time { margin: 0; font-size: 21px; font-weight: 800; line-height: 1.1; color: var(--ink); font-variant-numeric: tabular-nums; }
+.rv-code { margin: 0; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.05em; color: var(--ink-soft); }
+.rv-plus { font-size: 0.7rem; font-weight: 800; color: var(--ink-soft); margin-left: 0.3rem; white-space: nowrap; }
+.rv-track { display: flex; align-items: center; gap: 5px; }
+.rv-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--board); flex: none; }
+.rv-track-line { flex: 1 1 auto; height: 2px; background: var(--line); }
+
+/* perforated divider: dashed tear line with punched circles on the card edge */
+.rv-perf { position: relative; height: 0; border-top: 2px dashed var(--line); margin: 18px -20px 12px; }
+.rv-perf::before, .rv-perf::after {
+  content: ""; position: absolute; top: -7px; width: 14px; height: 14px;
+  border-radius: 50%; background: var(--paper);
+}
+.rv-perf::before { left: -7px; }
+.rv-perf::after { right: -7px; }
+
+/* class chip + seat stamp */
+.rv-class-chip {
+  display: inline-flex; align-items: center; padding: 0.3rem 0.8rem;
+  border: 1.5px solid var(--ink); border-radius: 999px;
+  font-weight: 800; font-size: 0.82rem; color: var(--ink);
+}
+.rv-stamp {
+  display: inline-block; padding: 0.15rem 0.7rem 0.2rem;
+  border: 2.5px solid currentColor; border-radius: 6px;
+  font-weight: 800; text-transform: uppercase; font-size: 0.78rem;
+  letter-spacing: 0.05em; transform: rotate(-3deg);
+}
+.rv-stamp-sm { font-size: 0.66rem; padding: 0.05rem 0.5rem 0.1rem; border-width: 2px; }
+.rv-stamp-ok { color: var(--green); }
+.rv-stamp-warn { color: var(--amber-ink); }
+.rv-stamp-bad { color: var(--red); }
+.rv-stamp-muted { color: var(--ink-soft); }
+.rv-avail-ok { color: var(--green); font-weight: 800; }
+.rv-avail-warn { color: var(--amber-ink); font-weight: 800; }
+.rv-avail-bad { color: var(--red); font-weight: 800; }
+.rv-avail-muted { color: var(--ink-soft); font-weight: 700; }
+
+.rv-meta { margin: 0.35rem 0 0; font-size: 0.72rem; color: var(--ink-soft); }
+.rv-link-board {
+  display: inline-flex; align-items: center; color: var(--board);
+  font-weight: 800; font-size: 0.9rem; text-decoration: none;
+}
+.rv-link-board:hover { text-decoration: underline; }
+
+/* split banner */
+.rv-banner {
+  display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; align-items: center; justify-content: space-between;
+  background: var(--green); color: #fff; font-weight: 800; font-size: 0.75rem;
+  letter-spacing: 0.08em; text-transform: uppercase; padding: 0.5rem 20px; margin: 0;
+}
+.rv-banner-over { background: var(--amber-ink); }
+.rv-via {
+  display: flex; align-items: center; gap: 0.5rem; background: var(--paper);
+  border: 1px dashed var(--line); border-radius: 10px; padding: 0.4rem 0.75rem;
+  font-size: 0.8rem; font-weight: 600; color: var(--ink-soft);
+}
+.rv-via-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; }
+
+/* inner blocks on a ticket */
+.rv-subblock {
+  margin-top: 0.75rem; background: var(--paper); border: 1px solid var(--line);
+  border-radius: 10px; padding: 0.7rem 0.8rem;
+}
+.rv-subblock-cap {
+  margin: 0; font-size: 0.68rem; font-weight: 800; letter-spacing: 0.05em;
+  text-transform: uppercase; color: var(--ink-soft);
+}
+.rv-date-chip {
+  display: inline-flex; gap: 0.3rem; border: 1.5px solid var(--ink-soft);
+  border-radius: 8px; padding: 0.15rem 0.5rem; font-size: 0.72rem; background: #fff;
+}
+.rv-date-ok { border-color: var(--green); color: var(--green); }
+.rv-date-warn { border-color: var(--amber-ink); color: var(--amber-ink); }
+.rv-date-na { border-color: var(--ink-soft); color: var(--ink-soft); }
+
+/* listbox on the station fields */
+.rv-listbox {
+  border-color: var(--line); box-shadow: var(--shadow-soft); color: var(--ink);
+  border-radius: 10px; background: #fff;
+}
+.rv-opt-active { background: var(--tint); }
+
+/* loading: paper-toned skeleton blocks with a soft pulse */
+.sk { display: inline-block; background: var(--line); border-radius: 6px; animation: rv-pulse 1.6s ease-in-out infinite; }
+@keyframes rv-pulse { 50% { opacity: 0.55; } }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
@@ -46,9 +243,5 @@ a.chip, span.chip { min-height: 0; }
 }
 
 @media (prefers-contrast: more) {
-  :root {
-    --rv-color-bg: #000000;
-    --rv-color-text: #ffffff;
-    --rv-focus-outline: 4px solid #ffd23f;
-  }
+  :root { --ink: #000000; --ink-soft: #33373F; --line: #B9AD8E; --shadow-soft: none; }
 }

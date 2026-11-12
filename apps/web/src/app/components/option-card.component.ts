@@ -1,9 +1,9 @@
-import { Component, computed, input } from '@angular/core';
+import { Component, computed, inject, input } from '@angular/core';
 
-import { AVAILABILITY_LABELS, Availability, AvailabilityState, CLASS_LABELS } from '@railvaani/train-core';
+import { Availability, CLASS_LABELS } from '@railvaani/train-core';
 import { SplitOption } from '@railvaani/split-engine';
 
-type ChipTone = 'ok' | 'warn' | 'bad';
+import { StationsService } from '../services/stations.service';
 
 /** Per-class fares and seat status for one direct train, fetched by the app. */
 export interface ClassDetail {
@@ -17,93 +17,101 @@ export interface ClassDetail {
   dateWiseLabel?: string;
 }
 
-const CHIP_CLASSES: Record<ChipTone, string> = {
-  ok: 'chip chip-ok',
-  warn: 'chip chip-warn',
-  bad: 'chip chip-bad',
-};
+type StampTone = 'rv-stamp-ok' | 'rv-stamp-warn' | 'rv-stamp-bad' | 'rv-stamp-muted';
+type AvailTone = 'rv-avail-ok' | 'rv-avail-warn' | 'rv-avail-bad' | 'rv-avail-muted';
 
-const CHIP_DARK_CSS = `
-  @media (prefers-color-scheme: dark) {
-    .chip-ok { background: #052e16; color: #86efac; }
-    .chip-warn { background: #451a03; color: #fcd34d; }
-    .chip-bad { background: #450a0a; color: #fca5a5; }
-    .date-ok { border-color: #166534; color: #86efac; }
-    .date-warn { border-color: #92400e; color: #fcd34d; }
-    .date-na { border-color: #334155; color: #64748b; }
+/** Pure presentation: a seat status to its stamp colour class.
+ *  Bookable or confirmed green, waitlist amber, regret red, unchecked muted. */
+function stampTone(a?: { state?: string } | null): StampTone {
+  const s = a?.state ?? '';
+  if (s === 'AVAILABLE' || s === 'RAC') return 'rv-stamp-ok';
+  if (s === 'WL') return 'rv-stamp-warn';
+  if (s === 'REGRET' || s === 'NOT_AVAILABLE') return 'rv-stamp-bad';
+  return 'rv-stamp-muted';
+}
+
+/** Pure presentation: the same status as coloured text for table rows. */
+function availTone(a?: { state?: string } | null): AvailTone {
+  const t = stampTone(a);
+  return t === 'rv-stamp-ok' ? 'rv-avail-ok'
+    : t === 'rv-stamp-warn' ? 'rv-avail-warn'
+    : t === 'rv-stamp-bad' ? 'rv-avail-bad'
+    : 'rv-avail-muted';
+}
+
+/** Pure presentation: uppercase stamp text for a seat status. */
+function stampText(a?: { state?: string; count?: number; wlPrefix?: string } | null): string {
+  const s = a?.state ?? '';
+  const count = a?.count ?? 0;
+  if (s === 'AVAILABLE') return count > 0 ? `Available ${count}` : 'Available';
+  if (s === 'RAC') return count > 0 ? `RAC ${count}` : 'RAC';
+  if (s === 'WL') {
+    if (count <= 0) return 'Waitlist';
+    // IRCTC notation, e.g. GNWL104/WL64, so the figure reads like the booking site.
+    return a?.wlPrefix ? `WL ${a.wlPrefix}/${count}` : `WL ${count}`;
   }
-`;
+  if (s === 'REGRET') return 'Regret';
+  if (s === 'NOT_AVAILABLE') return 'Not available';
+  return 'Check seats on IRCTC';
+}
 
+/** One train on a paper ticket stub, or a split journey as two stubs under one banner. */
 @Component({
   selector: 'rv-option-card',
   template: `
     @if (isDirect()) {
-      <article
-        class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:shadow-md sm:p-5 dark:border-slate-800 dark:bg-slate-900"
-      >
+      <article class="rv-card rv-ticket">
         <div class="flex items-start justify-between gap-3">
           <div class="min-w-0">
-            <div class="flex flex-wrap items-center gap-2">
-              <span class="rounded-md bg-indigo-600 px-2 py-0.5 font-mono text-xs font-bold text-white">{{ leg().trainNumber }}</span>
-              <h3 class="truncate text-base font-semibold text-slate-900 dark:text-slate-50">{{ leg().trainName }}</h3>
+            <p class="rv-train-no">{{ leg().trainNumber }}</p>
+            <h3 class="rv-train-name">{{ leg().trainName }}</h3>
+          </div>
+          <div class="shrink-0 text-right">
+            <p class="rv-fare">&#8377;{{ option().totalFare }}</p>
+            <p class="rv-fare-per">per person</p>
+          </div>
+        </div>
+
+        <div class="mt-4 flex items-end gap-2 sm:gap-3">
+          <div class="shrink-0">
+            <p class="rv-time">{{ leg().depTime }}</p>
+            <p class="rv-code">{{ leg().from }}</p>
+          </div>
+          <div class="min-w-0 flex-1 pb-1">
+            <p class="t-soft mb-1 text-center text-xs font-semibold">{{ duration() }}</p>
+            <div class="rv-track">
+              <span class="rv-dot"></span><span class="rv-track-line"></span><span class="rv-dot"></span>
             </div>
           </div>
           <div class="shrink-0 text-right">
-            <p class="text-xl font-bold text-slate-900 dark:text-white">&#8377;{{ option().totalFare }}</p>
-            <p class="text-xs text-slate-500 dark:text-slate-400">per head</p>
+            <p class="rv-time">{{ leg().arrTime }}@if (plusDays() > 0) {<span class="rv-plus">+{{ plusDays() }} {{ plusDays() === 1 ? 'day' : 'days' }}</span>}</p>
+            <p class="rv-code">{{ leg().to }}</p>
           </div>
         </div>
 
-        <div class="mt-4 flex items-center gap-2 sm:gap-4">
-          <div>
-            <p class="text-xl font-bold tabular-nums text-slate-900 dark:text-white">{{ leg().depTime }}</p>
-            <p class="text-xs text-slate-500 dark:text-slate-400">{{ leg().from }}</p>
-          </div>
-          <div class="min-w-0 flex-1">
-            <p class="text-center text-xs font-medium text-slate-500 dark:text-slate-400">{{ duration() }}</p>
-            <div class="relative mt-1 h-0.5 rounded bg-slate-200 dark:bg-slate-700">
-              <span class="absolute left-1/2 top-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-indigo-500"></span>
-            </div>
-          </div>
-          <div class="text-right">
-            <p class="text-xl font-bold tabular-nums text-slate-900 dark:text-white">{{ leg().arrTime }}</p>
-            <p class="text-xs text-slate-500 dark:text-slate-400">{{ leg().to }}</p>
-          </div>
-        </div>
+        <div class="rv-perf" aria-hidden="true"></div>
 
-        <div class="mt-4 flex flex-wrap items-center gap-2">
-          <span [class]="chip(leg().availability)" role="status" [attr.title]="asOfTitle(leg().availability)">
-            {{ chipText(leg().availability) }}
+        <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <span class="rv-class-chip">{{ classChip() }}</span>
+          <span class="rv-stamp {{ stampTone(leg().availability) }}" role="status" [attr.title]="asOfTitle(leg().availability)">
+            {{ stampText(leg().availability) }}
           </span>
-          @if (leg().availability.asOf; as ao) {
-            <span class="text-[10px] text-slate-400 dark:text-slate-500">as of {{ asOfTime(ao) }} IST</span>
-          }
-          <a
-            [href]="irctcUrl()"
-            target="_blank"
-            rel="noopener"
-            class="ml-auto inline-flex min-h-11 items-center rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-700"
-          >Book on IRCTC
-            <svg aria-hidden="true" class="ml-1.5 h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M7 17 17 7M9 7h8v8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          </a>
         </div>
+        <p class="rv-meta">{{ metaLine() }}</p>
+        <a [href]="irctcUrl()" target="_blank" rel="noopener" class="rv-link-board mt-1.5">Book on IRCTC &rarr;</a>
 
         @if (classEntries().length > 1) {
-          <div class="mt-3 rounded-xl bg-slate-50 p-3 dark:bg-slate-800/60">
-            <p class="text-xs font-semibold text-slate-500 dark:text-slate-400">
-              Availability by class &middot; general quota
-            </p>
+          <div class="rv-subblock">
+            <p class="rv-subblock-cap">Availability by class &middot; general quota</p>
             <div class="mt-2 grid gap-1.5 sm:grid-cols-2">
               @for (row of classEntries(); track row.cls) {
                 <div class="flex items-center justify-between gap-2 text-xs">
-                  <span class="font-medium text-slate-700 dark:text-slate-200">{{ row.label }}</span>
+                  <span class="t-ink font-semibold">{{ row.label }}</span>
                   <span class="flex items-center gap-2">
-                    @if (row.fare !== null) {
-                      <span class="tabular-nums text-slate-500 dark:text-slate-400">&#8377;{{ row.fare }}</span>
-                    }
+                    @if (row.fare !== null) { <span class="t-soft tabular-nums">&#8377;{{ row.fare }}</span> }
                     @if (row.avail; as av) {
-                      <span [class]="chip(av)" role="status" [attr.title]="asOfTitle(av)">{{ chipText(av) }}</span>
-                    }
+                      <span class="{{ availTone(av) }}" role="status" [attr.title]="asOfTitle(av)">{{ stampText(av) }}</span>
+                    } @else { <span class="rv-avail-muted">not checked</span> }
                   </span>
                 </div>
               }
@@ -112,89 +120,67 @@ const CHIP_DARK_CSS = `
         }
 
         @if (dateWiseRows().length > 0) {
-          <div class="mt-3 rounded-xl bg-indigo-50/60 p-3 dark:bg-indigo-950/30">
-            <p class="text-xs font-semibold text-slate-500 dark:text-slate-400">
-              Seats by date &middot; {{ dateWiseLabel() }} &middot; general quota
-            </p>
+          <div class="rv-subblock">
+            <p class="rv-subblock-cap">Seats by date &middot; {{ dateWiseLabel() }} &middot; general quota</p>
             <div class="mt-2 flex flex-wrap gap-1.5">
               @for (row of dateWiseRows(); track row.date) {
-                <span class="rounded-lg border bg-white px-2 py-1 text-xs tabular-nums dark:bg-slate-900 {{ row.cls }}" [attr.title]="row.title">
-                  <span class="text-slate-500 dark:text-slate-400">{{ row.short }}</span>
-                  <span class="ml-1 font-bold">{{ row.text }}</span>
+                <span class="rv-date-chip {{ row.cls }}" [attr.title]="row.title">
+                  <span class="t-soft">{{ row.short }}</span>
+                  <span class="font-bold">{{ row.text }}</span>
                 </span>
               }
             </div>
-            <p class="mt-1.5 text-[10px] text-slate-400 dark:text-slate-500">
-              Counts are ConfirmTkt snapshots and can lag IRCTC by a few hours; hover a date for its snapshot time.
-            </p>
+            <p class="rv-meta">Counts are ConfirmTkt snapshots and can lag IRCTC by a few hours; hover a date for its snapshot time.</p>
           </div>
         }
       </article>
     } @else {
-      <article
-        class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:shadow-md sm:p-5 dark:border-slate-800 dark:bg-slate-900"
-      >
-        <div class="flex items-start justify-between gap-3">
-          <div class="min-w-0">
-            <div class="flex flex-wrap items-center gap-2">
-              <span class="rounded-md bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-800 dark:bg-amber-900/50 dark:text-amber-200">Split journey</span>
-              <h3 class="text-base font-semibold text-slate-900 dark:text-slate-50">Via {{ hubName() || option().hub }}</h3>
-            </div>
-            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">2 tickets, {{ option().legs.length }} trains &middot; wait {{ shortDur(option().connectionMins ?? 0) }} at {{ hubName() || option().hub }}</p>
-          </div>
-          <div class="shrink-0 text-right">
-            <p class="text-xl font-bold text-slate-900 dark:text-white">&#8377;{{ option().totalFare }}</p>
-            <p class="text-xs text-slate-500 dark:text-slate-400">both legs</p>
-          </div>
-        </div>
+      <article class="rv-card rv-ticket-split overflow-hidden">
+        <p class="rv-banner" [class.rv-banner-over]="budgetNote().over">
+          <span>SPLIT &middot; 2 TICKETS, 1 JOURNEY{{ budgetNote().text }}</span>
+          <span>Total &#8377;{{ option().totalFare }}</span>
+        </p>
+        <div class="rv-ticket-body">
+          <ol class="space-y-2.5">
+            @for (leg of option().legs; track $index) {
+              @if ($index > 0) {
+                <li class="rv-via">
+                  <span class="rv-via-dot" aria-hidden="true"></span>
+                  <span>Wait {{ shortDur(option().connectionMins ?? 0) }} at {{ hub() }}</span>
+                </li>
+              }
+              <li>
+                <p class="m-0 flex flex-wrap items-baseline gap-x-2">
+                  <span class="rv-train-no-sm">{{ leg.trainNumber }}</span>
+                  <span class="t-ink font-bold">{{ leg.trainName }}</span>
+                </p>
+                <p class="t-soft m-0 mt-0.5 flex flex-wrap items-center gap-x-2 text-sm">
+                  <span class="t-ink font-bold tabular-nums">{{ leg.depTime }}</span>
+                  <span>{{ leg.from }}</span>
+                  <span aria-hidden="true">&rarr;</span>
+                  <span class="t-ink font-bold tabular-nums">{{ leg.arrTime }}</span>
+                  <span>{{ leg.to }}</span>
+                  <span class="t-ink font-bold">&#8377;{{ leg.fare }}</span>
+                  <span class="text-xs font-semibold">{{ leg.date === firstDate() ? 'same day' : 'next day' }}</span>
+                  <span class="rv-stamp rv-stamp-sm {{ stampTone(leg.availability) }}" role="status" [attr.title]="asOfTitle(leg.availability)">
+                    {{ stampText(leg.availability) }}
+                  </span>
+                </p>
+              </li>
+            }
+          </ol>
 
-        <ol class="mt-4 space-y-3 border-l-2 border-dashed border-indigo-200 pl-4 dark:border-indigo-900">
-          @for (leg of option().legs; track $index) {
-            <li>
-              <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
-                <span class="rounded-md bg-slate-100 px-2 py-0.5 font-mono text-xs font-bold text-slate-700 dark:bg-slate-800 dark:text-slate-200">{{ leg.trainNumber }}</span>
-                <span class="text-sm font-medium text-slate-800 dark:text-slate-100">{{ leg.trainName }}</span>
-              </div>
-              <div class="mt-0.5 flex flex-wrap items-center gap-x-2 text-sm text-slate-600 dark:text-slate-300">
-                <span class="font-semibold tabular-nums">{{ leg.depTime }}</span>
-                <span class="text-slate-400">{{ leg.from }}</span>
-                <span aria-hidden="true">&rarr;</span>
-                <span class="font-semibold tabular-nums">{{ leg.arrTime }}</span>
-                <span class="text-slate-400">{{ leg.to }}</span>
-                <span class="font-semibold text-slate-900 dark:text-white">&#8377;{{ leg.fare }}</span>
-                <span class="text-xs" [class]="leg.date === firstDate() ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'">
-                  {{ leg.date === firstDate() ? 'same day' : 'next day' }}
-                </span>
-              </div>
-              <span [class]="chip(leg.availability)" role="status">{{ chipText(leg.availability) }}</span>
-            </li>
-          }
-        </ol>
+          <div class="rv-perf" aria-hidden="true"></div>
 
-        <div class="mt-4 flex justify-end">
-          <a
-            [href]="irctcUrl()"
-            target="_blank"
-            rel="noopener"
-            class="inline-flex min-h-11 items-center rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-700"
-          >Book both legs on IRCTC
-            <svg aria-hidden="true" class="ml-1.5 h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M7 17 17 7M9 7h8v8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          </a>
+          <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <span class="rv-class-chip">{{ clsLabel() || 'Sleeper' }}</span>
+          </div>
+          <p class="rv-meta">Two separate tickets, booked one after the other on IRCTC.</p>
+          <a [href]="irctcUrl()" target="_blank" rel="noopener" class="rv-link-board mt-1.5">Book both legs on IRCTC &rarr;</a>
         </div>
       </article>
     }
   `,
-  styles: [`
-    .chip { display: inline-flex; align-items: center; gap: 0.35rem; border-radius: 9999px;
-            padding: 0.25rem 0.75rem; font-size: 0.8rem; font-weight: 600; }
-    .chip-ok { background: #dcfce7; color: #166534; }
-    .chip-warn { background: #fef3c7; color: #92400e; }
-    .chip-bad { background: #fee2e2; color: #991b1b; }
-    .date-ok { border-color: #86efac; color: #166534; }
-    .date-warn { border-color: #fcd34d; color: #92400e; }
-    .date-na { border-color: #e2e8f0; color: #94a3b8; }
-    ${CHIP_DARK_CSS}
-  `],
 })
 export class OptionCardComponent {
   readonly option = input.required<SplitOption>();
@@ -204,11 +190,59 @@ export class OptionCardComponent {
   readonly dateWise = input<Partial<Record<string, Availability>> | undefined>(undefined);
   readonly dateWiseDates = input<string[] | undefined>(undefined);
   readonly dateWiseLabel = input('');
+  /** Selected class code, to look up the fare shown inside the class chip. */
+  readonly clsCode = input<string>('');
+  /** Selected class label, shown in the class chip. */
+  readonly clsLabel = input('');
+  /** Per-person budget from the form; null when unset. Drives the split banner note. */
+  readonly budget = input<number | null>(null);
+
+  private readonly stations = inject(StationsService);
+
+  /** Template-facing handles for the pure helpers above. */
+  readonly stampTone = stampTone;
+  readonly stampText = stampText;
+  readonly availTone = availTone;
 
   readonly isDirect = computed(() => this.option().type === 'direct');
   readonly leg = computed(() => this.option().legs[0]!);
   readonly firstDate = computed(() => this.option().legs[0]?.date ?? '');
   readonly duration = computed(() => this.shortDur(this.option().totalDurationMins));
+  readonly hub = computed(() => this.hubName() || this.option().hub);
+
+  /** Whole days the journey spans, from departure time plus duration: "+1 day" on arrival. */
+  readonly plusDays = computed(() => {
+    const m = /^(\d{1,2}):(\d{2})/.exec(this.leg().depTime ?? '');
+    if (!m) return 0;
+    const start = Number(m[1]) * 60 + Number(m[2]);
+    const days = Math.floor((start + (this.option().totalDurationMins || 0)) / 1440);
+    return days > 0 ? days : 0;
+  });
+
+  /** Class chip text: the selected class, with the fare inside when it is known. */
+  readonly classChip = computed(() => {
+    const label = this.clsLabel() || this.dateWiseLabel();
+    const fare = this.classDetail()?.fares[this.clsCode()];
+    return fare != null ? `${label} · ₹${fare}` : label;
+  });
+
+  /** Snapshot time plus the actual boarding and alighting stations, in words. */
+  readonly metaLine = computed(() => {
+    const from = this.stations.name(this.leg().from) || this.leg().from;
+    const to = this.stations.name(this.leg().to) || this.leg().to;
+    const route = `Boards at ${from}, alights at ${to}.`;
+    const ao = this.leg().availability?.asOf;
+    return ao ? `Seat snapshot ${this.asOfTime(ao)} IST. ${route}` : route;
+  });
+
+  /** Over-budget state and note for the split banner; no note when no budget is set. */
+  readonly budgetNote = computed(() => {
+    const b = this.budget();
+    if (b == null) return { over: false, text: '' };
+    const total = this.option().totalFare;
+    if (total <= b) return { over: false, text: ` · inside your ₹${b} budget` };
+    return { over: true, text: ` · ₹${total - b} over your ₹${b} budget` };
+  });
 
   /** Classes the train sells on this leg, each with its fare and seat status. */
   readonly classEntries = computed(() => {
@@ -229,7 +263,7 @@ export class OptionCardComponent {
     return rows;
   });
 
-  /** Per-date chips for the strip: date, short label, tone text, snapshot time. */
+  /** Per-date chips for the strip: date, short label, tone class, snapshot time. */
   readonly dateWiseRows = computed(() => {
     const map = this.dateWise();
     const dates = this.dateWiseDates();
@@ -240,17 +274,17 @@ export class OptionCardComponent {
       const d = new Date(`${date}T00:00:00Z`);
       const short = `${d.getUTCDate()} ${wd[d.getUTCDay()] ?? ''}`.trim();
       let text = '\u2014';
-      let cls = 'date-na';
+      let cls = 'rv-date-na';
       if (av) {
         if (av.state === 'AVAILABLE') {
           text = av.count > 0 ? `${av.count}` : 'Yes';
-          cls = 'date-ok';
+          cls = 'rv-date-ok';
         } else if (av.state === 'RAC') {
           text = `RAC ${av.count || ''}`.trim();
-          cls = 'date-warn';
+          cls = 'rv-date-ok';
         } else if (av.state === 'WL') {
           text = av.count > 0 ? `WL ${av.count}` : 'WL';
-          cls = 'date-warn';
+          cls = 'rv-date-warn';
         }
       }
       const title = av?.asOf ? `ConfirmTkt snapshot as of ${this.asOfTime(av.asOf)} IST` : '';
@@ -271,28 +305,5 @@ export class OptionCardComponent {
     const h = Math.floor(mins / 60);
     const m = mins % 60;
     return m === 0 ? `${h}h` : `${h}h ${m}m`;
-  }
-
-  chip(a: { state: string; count: number }): string {
-    const tone = this.tone(a.state);
-    return CHIP_CLASSES[tone];
-  }
-
-  chipText(a: { state: string; count: number; wlPrefix?: string }): string {
-    const key = (a.state ?? 'NOT_AVAILABLE') as keyof typeof AVAILABILITY_LABELS;
-    const meta = AVAILABILITY_LABELS[key] ?? AVAILABILITY_LABELS['NOT_AVAILABLE'];
-    let suffix = '';
-    if (a.state === 'AVAILABLE' && a.count > 0) suffix = ` (${a.count})`;
-    if (a.state === 'WL' && a.count > 0) {
-      // IRCTC notation, e.g. GNWL104/WL64, so the figure reads like the booking site.
-      suffix = a.wlPrefix ? ` (${a.wlPrefix}/${a.count})` : ` (WL ${a.count})`;
-    }
-    return `${meta.icon} ${meta.en}${suffix}`;
-  }
-
-  private tone(state: string): ChipTone {
-    if (state === 'AVAILABLE' || state === 'RAC') return 'ok';
-    if (state === 'WL') return 'warn';
-    return 'bad';
   }
 }

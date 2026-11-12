@@ -32,43 +32,51 @@ const IRCTC_URL = 'https://www.irctc.co.in/nget/train-search';
   template: `
     <a class="skip-link" href="#main">Skip to main content</a>
 
-    <header class="bg-gradient-to-r from-indigo-700 via-indigo-800 to-slate-900 text-white">
-      <div class="mx-auto flex max-w-3xl items-center gap-3 px-4 py-4">
-        <span class="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white/15" aria-hidden="true">
-          <svg class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="5" y="3" width="14" height="13" rx="2"/><path d="M5 11h14M9 16l-2 5M15 16l2 5M7.5 13.5h.01M16.5 13.5h.01" stroke-linecap="round"/>
+    <header class="rv-header">
+      <div class="mx-auto flex max-w-[1060px] items-center gap-3 px-4 py-3.5">
+        <span class="rv-logo" aria-hidden="true">
+          <svg class="h-6 w-6" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="9" y="6" width="14" height="15" rx="3"/>
+            <path d="M9 13.5h14M12.5 21l-2.5 5M19.5 21l2.5 5"/>
+            <circle cx="12.5" cy="17.5" r="1" fill="currentColor" stroke="none"/>
+            <circle cx="19.5" cy="17.5" r="1" fill="currentColor" stroke="none"/>
           </svg>
         </span>
-        <div>
-          <p class="text-lg font-bold leading-tight">RailVaani</p>
-          <p class="text-xs text-indigo-200">Voice-first train search, all India</p>
+        <div class="min-w-0">
+          <p class="rv-wordmark">RailVaani</p>
+          <p class="rv-tagline">रेलवाणी · बोलकर ट्रेन खोजें</p>
         </div>
-        <span class="ml-auto rounded-full bg-white/10 px-2.5 py-1 text-[11px] font-medium text-indigo-100">live IR data</span>
+        <p class="rv-header-note ml-auto hidden shrink-0 text-right leading-snug md:block">
+          Voice-first train search<br>
+          Direct + split journeys
+        </p>
       </div>
     </header>
 
-    <main id="main" class="mx-auto max-w-3xl px-4 pb-16">
+    <main id="main" class="mx-auto max-w-[1060px] px-4 pb-16">
       <h1 class="sr-only">Find trains across India</h1>
 
       <!-- Search card -->
-      <section class="mt-6 rounded-2xl border border-slate-200 bg-white p-4 shadow-lg sm:p-6 dark:border-slate-800 dark:bg-slate-900" aria-label="Search form">
+      <section class="rv-card mt-6 p-4 sm:p-6" aria-label="Search form">
         <button
           type="button"
           (click)="startVoice()"
           [attr.aria-pressed]="listening()"
-          class="mb-4 flex w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed border-indigo-300 bg-indigo-50 px-4 py-3 text-sm font-semibold text-indigo-800 transition hover:bg-indigo-100
-                 dark:border-indigo-800 dark:bg-indigo-950/60 dark:text-indigo-200"
-          [class.animate-pulse]="listening()"
+          class="rv-voice mb-4 flex items-center"
         >
+          <span class="rv-voice-disc" aria-hidden="true">
+            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="9" y="2" width="6" height="12" rx="3"/>
+              <path d="M5 10a7 7 0 0 0 14 0M12 17v5" stroke-linecap="round"/>
+            </svg>
+          </span>
           @if (listening()) {
-            <span class="relative flex h-3 w-3"><span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-indigo-500 opacity-75"></span><span class="relative inline-flex h-3 w-3 rounded-full bg-indigo-600"></span></span>
-            Listening&hellip; say "Gorakhpur to New Delhi"
+            <span class="animate-pulse">Listening&hellip; say "Gorakhpur to New Delhi"</span>
           } @else {
-            <svg aria-hidden="true" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5" stroke-linecap="round"/></svg>
-            Tap to search by voice
+            <span>Tap and say: "Gorakhpur to New Delhi"</span>
           }
         </button>
-        @if (voiceNote()) { <p class="mb-3 rounded-lg bg-slate-100 px-3 py-2 text-xs text-slate-600 dark:bg-slate-800 dark:text-slate-300" role="status">{{ voiceNote() }}</p> }
+        @if (voiceNote()) { <p class="rv-note" role="status">{{ voiceNote() }}</p> }
 
         <div class="grid gap-3">
           <div class="grid gap-3 sm:grid-cols-[1fr_auto_1fr] sm:items-end">
@@ -80,13 +88,10 @@ const IRCTC_URL = 'https://www.irctc.co.in/nget/train-search';
               [suggestions]="fromSuggest()"
               (queryChange)="onFromQuery($event)"
             />
-            <button
-              type="button"
-              (click)="swap()"
-              aria-label="Swap origin and destination"
-              class="flex h-12 w-12 items-center justify-center justify-self-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition hover:text-indigo-600 dark:border-slate-700 dark:bg-slate-900"
-            >
-              <svg aria-hidden="true" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 16V4m0 0L4 7m3-3 3 3m7 4v12m0 0 3-3m-3 3-3-3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <button type="button" (click)="swap()" aria-label="Swap origin and destination" class="rv-swap">
+              <svg aria-hidden="true" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M7 16V4m0 0L4 7m3-3 3 3m7 4v12m0 0 3-3m-3 3-3-3" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
             </button>
             <rv-station-input
               id="to"
@@ -100,30 +105,30 @@ const IRCTC_URL = 'https://www.irctc.co.in/nget/train-search';
 
           <div class="grid grid-cols-2 gap-3">
             <div>
-              <label for="date" class="block text-sm font-semibold text-slate-600 dark:text-slate-300">Journey date</label>
-              <input id="date" type="date" [value]="date()" [min]="minDate" (change)="date.set(d.value)" #d
-                class="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-base text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
+              <label for="date" class="rv-label">Journey date</label>
+              <input id="date" type="date" class="rv-input" [value]="date()" [min]="minDate" (change)="date.set(d.value)" #d />
             </div>
             <div>
-              <label for="cls" class="block text-sm font-semibold text-slate-600 dark:text-slate-300">Class</label>
-              <select id="cls" [value]="cls()" (change)="setCls(c.value)" #c
-                class="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-base text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
+              <label for="cls" class="rv-label">Class</label>
+              <select id="cls" class="rv-input" [value]="cls()" (change)="setCls(c.value)" #c>
                 @for (cl of classes; track cl) { <option [value]="cl">{{ classLabel(cl) }}</option> }
               </select>
             </div>
           </div>
 
           <div>
-            <label for="budget" class="block text-sm font-semibold text-slate-600 dark:text-slate-300">Budget per person (&#8377;, optional)</label>
-            <input id="budget" type="number" min="0" inputmode="numeric" placeholder="e.g. 600" [value]="budget()" (input)="budget.set(b.value)" #b
-              class="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-base text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
+            <label for="budget" class="rv-label">Budget per person (&#8377;, optional)</label>
+            <input id="budget" type="number" min="0" inputmode="numeric" placeholder="e.g. 600" class="rv-input"
+              [value]="budget()" (input)="budget.set(b.value)" #b />
           </div>
         </div>
 
-        <button type="button" (click)="search()" [disabled]="searching()"
-          class="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-3 text-base font-bold text-white transition hover:bg-indigo-700 disabled:opacity-60">
+        <button type="button" (click)="search()" [disabled]="searching()" class="rv-primary mt-4">
           @if (searching()) {
-            <svg class="h-5 w-5 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-90" fill="currentColor" d="M4 12a8 8 0 0 1 8-8v4a4 4 0 0 0-4 4H4z"/></svg>
+            <svg class="h-5 w-5 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+              <path class="opacity-90" fill="currentColor" d="M4 12a8 8 0 0 1 8-8v4a4 4 0 0 0-4 4H4z"/>
+            </svg>
             @if (progressTotal() > 0) {
               Checking seats {{ progressDone() }}/{{ progressTotal() }} &middot; {{ elapsed() }}s&hellip;
             } @else {
@@ -134,8 +139,7 @@ const IRCTC_URL = 'https://www.irctc.co.in/nget/train-search';
 
         <div class="mt-3 flex flex-wrap gap-2">
           @for (ex of examples; track ex[0]) {
-            <button type="button" (click)="tryExample(ex[0], ex[1])"
-              class="inline-flex min-h-[48px] items-center rounded-full border border-slate-200 bg-slate-50 px-4 text-xs font-medium text-slate-600 transition hover:border-indigo-300 hover:text-indigo-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+            <button type="button" (click)="tryExample(ex[0], ex[1])" class="rv-chip">
               {{ ex[0] }} &rarr; {{ ex[1] }}
             </button>
           }
@@ -143,78 +147,79 @@ const IRCTC_URL = 'https://www.irctc.co.in/nget/train-search';
       </section>
 
       @if (error() && !searching()) {
-        <div class="mt-4 flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4 dark:border-red-900 dark:bg-red-950/50" role="alert">
-          <p class="text-sm text-red-800 dark:text-red-200">{{ error() }}</p>
-          <button type="button" (click)="search()" class="ml-auto shrink-0 rounded-lg bg-red-100 px-3 py-1.5 text-xs font-semibold text-red-800 dark:bg-red-900/60 dark:text-red-100">Retry</button>
+        <div class="rv-card rv-error mt-4 flex items-start gap-3 p-4" role="alert">
+          <p class="t-ink text-sm">{{ error() }}</p>
+          <button type="button" (click)="search()" class="rv-retry ml-auto shrink-0">Retry</button>
         </div>
       }
 
       <!-- Results -->
       @if (results(); as rs) {
-        <section class="mt-6" aria-label="Search results">
+        <section class="mt-8" aria-label="Search results">
           <div class="flex flex-wrap items-center gap-2">
-            <p class="mr-auto text-sm font-semibold text-slate-700 dark:text-slate-200" role="status">
-              {{ rs.length }} options \u00b7 {{ stations.name(fromCode()) || fromCode() }} to {{ stations.name(toCode()) || toCode() }}
-            </p>
+            <h2 class="rv-results-title mr-auto">
+              <span role="status">{{ rs.length }} options &middot; {{ stations.name(fromCode()) || fromCode() }} to {{ stations.name(toCode()) || toCode() }}</span>
+            </h2>
             @for (s of sorts; track s.key) {
-              <button type="button" (click)="sort.set(s.key)" [class]="sortChip(s.key)">
+              <button type="button" (click)="sort.set(s.key)" class="rv-sort" [class.rv-sort-active]="sort() === s.key">
                 {{ s.label }}
               </button>
             }
-            @if (partialNote()) {
-            <p class="mt-2 text-xs text-slate-500 dark:text-slate-400" role="status">
-              Some options could not be checked.
-            </p>
-          }
-        </div>
+          </div>
+          @if (partialNote()) { <p class="rv-note mt-2" role="status">Some options could not be checked.</p> }
 
-          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+          <p class="rv-fineprint mt-1">
             Schedules and fares live from Indian Railways data. Availability comes from ConfirmTkt's cache and can
             lag IRCTC by a few hours; each figure carries its snapshot time. Booking happens on IRCTC.
             @if (isToday()) { Trains that already departed today are not shown. }
           </p>
 
-          <h2 class="mt-5 text-sm font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">Direct trains</h2>
-          <div class="mt-2 space-y-3">
+          <h3 class="rv-section mt-5">Direct trains</h3>
+          <div class="mt-2 grid items-start gap-4 lg:grid-cols-2">
             @for (o of shown(); track trackKey(o)) {
               @if (o.type === 'direct') {
                 <rv-option-card [option]="o" [classDetail]="classDetailFor(o)"
                   [dateWise]="classDetailFor(o)?.dateWise" [dateWiseDates]="classDetailFor(o)?.dateWiseDates"
-                  [dateWiseLabel]="classLabel(cls())" />
+                  [dateWiseLabel]="classLabel(cls())" [clsCode]="cls()" [clsLabel]="classLabel(cls())" [budget]="budgetNum()" />
               }
             } @empty {
-              <p class="rounded-xl bg-slate-50 p-4 text-sm text-slate-500 dark:bg-slate-800/60 dark:text-slate-400">No direct train runs this route on this date. Check the split options below.</p>
+              <p class="rv-card rv-empty">No direct train runs this route on this date. Check the split options below.</p>
             }
           </div>
 
-          <h2 class="mt-6 text-sm font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">Split options (two tickets, one journey)</h2>
-          <div class="mt-2 space-y-3">
+          <h3 class="rv-section mt-6">Split options (two tickets, one journey)</h3>
+          <div class="mt-2 grid items-start gap-4 lg:grid-cols-2">
             @for (o of shown(); track trackKey(o)) {
-              @if (o.type === 'split') { <rv-option-card [option]="o" [hubName]="stations.name(o.hub)" /> }
+              @if (o.type === 'split') {
+                <rv-option-card [option]="o" [hubName]="stations.name(o.hub)" [clsLabel]="classLabel(cls())" [budget]="budgetNum()" />
+              }
             } @empty {
-              <p class="rounded-xl bg-slate-50 p-4 text-sm text-slate-500 dark:bg-slate-800/60 dark:text-slate-400">No split option fits the 90 minute to 8 hour connection window for this route.</p>
+              <p class="rv-card rv-empty">No split option fits the 90 minute to 8 hour connection window for this route.</p>
             }
           </div>
         </section>
       } @else if (searching()) {
-        <section class="mt-6 space-y-3" aria-label="Loading results">
-          @for (i of [1, 2, 3]; track i) {
-            <div class="animate-pulse rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
-              <div class="flex justify-between"><div class="h-4 w-40 rounded bg-slate-200 dark:bg-slate-700"></div><div class="h-4 w-16 rounded bg-slate-200 dark:bg-slate-700"></div></div>
-              <div class="mt-4 flex justify-between"><div class="h-6 w-14 rounded bg-slate-200 dark:bg-slate-700"></div><div class="h-2 w-40 self-center rounded bg-slate-100 dark:bg-slate-800"></div><div class="h-6 w-14 rounded bg-slate-200 dark:bg-slate-700"></div></div>
-              <div class="mt-4 h-8 w-32 rounded-full bg-slate-100 dark:bg-slate-800"></div>
+        <section class="mt-8 grid items-start gap-4 lg:grid-cols-2" aria-label="Loading results" aria-busy="true">
+          @for (i of [1, 2, 3, 4]; track i) {
+            <div class="rv-card rv-ticket" aria-hidden="true">
+              <div class="flex justify-between"><span class="sk h-6 w-28"></span><span class="sk h-6 w-20"></span></div>
+              <div class="mt-5 flex items-center justify-between gap-3">
+                <span class="sk h-7 w-16"></span><span class="sk h-2 w-28"></span><span class="sk h-7 w-16"></span>
+              </div>
+              <div class="mt-5 flex gap-3"><span class="sk h-9 w-24"></span><span class="sk h-9 w-36"></span></div>
             </div>
           }
         </section>
       }
 
-      <footer class="mt-10 border-t border-slate-200 pt-4 text-center text-xs text-slate-500 dark:border-slate-800 dark:text-slate-400">
+      <footer class="rv-footer mt-10 pt-4 text-center text-xs">
         <p>Data: ConfirmTkt (fares, availability) and erail.in (routes), unofficial mirrors. Booking: IRCTC, the official site.</p>
         <p class="mt-1">RailVaani &middot; voice-first, accessible train search</p>
       </footer>
     </main>
   `,
 })
+
 export class AppComponent implements OnInit {
   private readonly rail = inject(RailService);
   readonly stations = inject(StationsService);
@@ -255,6 +260,12 @@ export class AppComponent implements OnInit {
 
   readonly minDate = new Date().toISOString().slice(0, 10);
 
+  /** Budget as a number for the split banner note; null when unset. */
+  readonly budgetNum = computed(() => {
+    const n = Number(this.budget());
+    return Number.isFinite(n) && n > 0 ? n : null;
+  });
+
   readonly shown = computed(() => {
     const list = [...(this.results() ?? [])];
     switch (this.sort()) {
@@ -272,13 +283,6 @@ export class AppComponent implements OnInit {
   classLabel(c: TrainClass): string { return CLASS_LABELS[c]; }
 
   setCls(value: string): void { this.cls.set(value as TrainClass); }
-
-  sortChip(key: 'best' | 'cheapest' | 'fastest'): string {
-    const base = 'rounded-full px-3 py-1.5 text-xs font-semibold transition';
-    return this.sort() === key
-      ? `${base} bg-indigo-600 text-white`
-      : `${base} bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300`;
-  }
 
   onFromQuery(q: string): void { this.fromSuggest.set(this.stations.search(q)); }
   onToQuery(q: string): void { this.toSuggest.set(this.stations.search(q)); }

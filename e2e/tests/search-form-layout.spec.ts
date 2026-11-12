@@ -30,3 +30,25 @@ test('From and To share a row on desktop, date and class beside each other', asy
   expect(Math.abs(rows.date - rows.cls)).toBeLessThanOrEqual(4);
   expect(rows.budget).toBeGreaterThan(rows.date);
 });
+
+test('paper theme is applied: tokens, fonts, and no gradients', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto('/');
+
+  // Page background is the paper tone from --paper (#FAF4E8).
+  const bg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  expect(bg).toBe('rgb(250, 244, 232)');
+
+  // Signage blue theme colour and the Mukta body font are loaded.
+  expect(await page.getAttribute('meta[name="theme-color"]', 'content')).toBe('#17457A');
+  const font = await page.evaluate(() => getComputedStyle(document.querySelector('main') as Element).fontFamily);
+  expect(font).toContain('Mukta');
+
+  // The redesign removes every linear/radial gradient from app styles.
+  const gradients = await page.evaluate(() =>
+    Array.from(document.querySelectorAll('body, body *'))
+      .map((el) => getComputedStyle(el).backgroundImage)
+      .filter((img) => /gradient/.test(img)),
+  );
+  expect(gradients).toEqual([]);
+});
