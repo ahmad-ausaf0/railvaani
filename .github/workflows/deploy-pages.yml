@@ -30,6 +30,10 @@ jobs:
       - name: Build packages and web app
         run: npm run build:pages
 
+      # SPA fallback: a pasted or reloaded /results URL serves the app, not a 404.
+      - name: Copy index.html to 404.html
+        run: cp dist/web/browser/index.html dist/web/browser/404.html
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
