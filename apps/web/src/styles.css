@@ -151,6 +151,7 @@ button, a, input, select { min-height: 48px; }
 .rv-time { margin: 0; font-size: 21px; font-weight: 800; line-height: 1.1; color: var(--ink); font-variant-numeric: tabular-nums; }
 .rv-code { margin: 0; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.05em; color: var(--ink-soft); }
 .rv-plus { font-size: 0.7rem; font-weight: 800; color: var(--ink-soft); margin-left: 0.3rem; white-space: nowrap; }
+.rv-date { margin: 0; font-size: 0.7rem; font-weight: 600; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
 .rv-track { display: flex; align-items: center; gap: 5px; }
 .rv-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--board); flex: none; }
 .rv-track-line { flex: 1 1 auto; height: 2px; background: var(--line); }
@@ -200,6 +201,7 @@ button, a, input, select { min-height: 48px; }
   letter-spacing: 0.08em; text-transform: uppercase; padding: 0.5rem 20px; margin: 0;
 }
 .rv-banner-over { background: var(--amber-ink); }
+.rv-banner-sub { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.02em; text-transform: none; }
 .rv-via {
   display: flex; align-items: center; gap: 0.5rem; background: var(--paper);
   border: 1px dashed var(--line); border-radius: 10px; padding: 0.4rem 0.75rem;

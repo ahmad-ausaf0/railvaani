@@ -4,6 +4,7 @@ import { Availability, CLASS_LABELS } from '@railvaani/train-core';
 import { SplitOption } from '@railvaani/split-engine';
 
 import { StationsService } from '../services/stations.service';
+import { addDaysISO, arrDayDelta, fmtDuration, fmtShortDate, legDurationMins } from '../shared/leg-times';
 
 /** Per-class fares and seat status for one direct train, fetched by the app. */
 export interface ClassDetail {
@@ -75,6 +76,7 @@ function stampText(a?: { state?: string; count?: number; wlPrefix?: string } | n
         <div class="mt-4 flex items-end gap-2 sm:gap-3">
           <div class="shrink-0">
             <p class="rv-time">{{ leg().depTime }}</p>
+            @if (depDate()) { <p class="rv-date">{{ depDate() }}</p> }
             <p class="rv-code">{{ leg().from }}</p>
           </div>
           <div class="min-w-0 flex-1 pb-1">
@@ -85,6 +87,7 @@ function stampText(a?: { state?: string; count?: number; wlPrefix?: string } | n
           </div>
           <div class="shrink-0 text-right">
             <p class="rv-time">{{ leg().arrTime }}@if (plusDays() > 0) {<span class="rv-plus">+{{ plusDays() }} {{ plusDays() === 1 ? 'day' : 'days' }}</span>}</p>
+            @if (arrDate()) { <p class="rv-date">{{ arrDate() }}</p> }
             <p class="rv-code">{{ leg().to }}</p>
           </div>
         </div>
@@ -140,13 +143,17 @@ function stampText(a?: { state?: string; count?: number; wlPrefix?: string } | n
           <span>SPLIT &middot; 2 TICKETS, 1 JOURNEY{{ budgetNote().text }}</span>
           <span>Total &#8377;{{ option().totalFare }}</span>
         </p>
+        <p class="rv-banner rv-banner-sub">
+          <span>Total {{ fmtDuration(option().totalDurationMins) }}</span>
+          @if (waitLabel()) { <span>{{ waitLabel() }}</span> }
+        </p>
         <div class="rv-ticket-body">
           <ol class="space-y-2.5">
             @for (leg of option().legs; track $index) {
               @if ($index > 0) {
                 <li class="rv-via">
                   <span class="rv-via-dot" aria-hidden="true"></span>
-                  <span>Wait {{ shortDur(option().connectionMins ?? 0) }} at {{ hub() }}</span>
+                  <span>Wait {{ fmtDuration(option().connectionMins ?? 0) }} at {{ hub() }}</span>
                 </li>
               }
               <li>
@@ -157,9 +164,12 @@ function stampText(a?: { state?: string; count?: number; wlPrefix?: string } | n
                 <p class="t-soft m-0 mt-0.5 flex flex-wrap items-center gap-x-2 text-sm">
                   <span class="t-ink font-bold tabular-nums">{{ leg.depTime }}</span>
                   <span>{{ leg.from }}</span>
+                  <span class="t-soft text-xs tabular-nums">{{ fmtShortDate(leg.date) }}</span>
                   <span aria-hidden="true">&rarr;</span>
                   <span class="t-ink font-bold tabular-nums">{{ leg.arrTime }}</span>
                   <span>{{ leg.to }}</span>
+                  <span class="t-soft text-xs tabular-nums">{{ legArrDate(leg) }}</span>
+                  <span class="t-soft text-xs font-semibold tabular-nums">{{ fmtDuration(legDur(leg.depTime, leg.arrTime)) }}</span>
                   <span class="t-ink font-bold">&#8377;{{ leg.fare }}</span>
                   <span class="text-xs font-semibold">{{ leg.date === firstDate() ? 'same day' : 'next day' }}</span>
                   <span class="rv-stamp rv-stamp-sm {{ stampTone(leg.availability) }}" role="status" [attr.title]="asOfTitle(leg.availability)">
@@ -203,11 +213,14 @@ export class OptionCardComponent {
   readonly stampTone = stampTone;
   readonly stampText = stampText;
   readonly availTone = availTone;
+  readonly fmtShortDate = fmtShortDate;
+  readonly fmtDuration = fmtDuration;
+  readonly legDur = legDurationMins;
 
   readonly isDirect = computed(() => this.option().type === 'direct');
   readonly leg = computed(() => this.option().legs[0]!);
   readonly firstDate = computed(() => this.option().legs[0]?.date ?? '');
-  readonly duration = computed(() => this.shortDur(this.option().totalDurationMins));
+  readonly duration = computed(() => fmtDuration(this.option().totalDurationMins));
   readonly hub = computed(() => this.hubName() || this.option().hub);
 
   /** Whole days the journey spans, from departure time plus duration: "+1 day" on arrival. */
@@ -217,6 +230,17 @@ export class OptionCardComponent {
     const start = Number(m[1]) * 60 + Number(m[2]);
     const days = Math.floor((start + (this.option().totalDurationMins || 0)) / 1440);
     return days > 0 ? days : 0;
+  });
+
+  /** Real calendar dates under the times, derived from the leg's own date:
+   *  departure date as searched, arrival date shifted by the day offset. */
+  readonly depDate = computed(() => fmtShortDate(this.leg().date));
+  readonly arrDate = computed(() => fmtShortDate(addDaysISO(this.leg().date, this.plusDays())));
+
+  /** Split summary: the change wait with the hub's name. Empty when there is none. */
+  readonly waitLabel = computed(() => {
+    const w = this.option().connectionMins ?? 0;
+    return w > 0 ? `${fmtDuration(w)} wait at ${this.hub()}` : '';
   });
 
   /** Class chip text: the selected class, with the fare inside when it is known. */
@@ -292,6 +316,11 @@ export class OptionCardComponent {
     });
   });
 
+  /** Arrival calendar date for one split leg, from its own date and clock times. */
+  legArrDate(leg: { date: string; depTime: string; arrTime: string }): string {
+    return fmtShortDate(addDaysISO(leg.date, arrDayDelta(leg.depTime, leg.arrTime)));
+  }
+
   asOfTime(iso: string): string {
     const m = /T(\d{2}:\d{2})/.exec(iso ?? '');
     return m?.[1] ?? '';
@@ -301,9 +330,4 @@ export class OptionCardComponent {
     return a?.asOf ? `ConfirmTkt snapshot as of ${this.asOfTime(a.asOf)} IST` : '';
   }
 
-  shortDur(mins: number): string {
-    const h = Math.floor(mins / 60);
-    const m = mins % 60;
-    return m === 0 ? `${h}h` : `${h}h ${m}m`;
-  }
 }

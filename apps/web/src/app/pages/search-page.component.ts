@@ -9,6 +9,7 @@ import { RailService } from '../services/rail.service';
 import { StationsService } from '../services/stations.service';
 import { VoiceIntentService } from '../services/voice-intent.service';
 import { TRAIN_CLASSES, classLabel } from '../shared/train-classes';
+import { istToday } from '../shared/search-params';
 
 interface Recognition {
   lang: string;
@@ -141,7 +142,7 @@ export class SearchPageComponent implements OnInit {
   readonly fromSuggest = signal<Station[]>([]);
   readonly toSuggest = signal<Station[]>([]);
 
-  readonly minDate = new Date().toISOString().slice(0, 10);
+  readonly minDate = istToday();
 
   ngOnInit(): void {
     this.prefill();
