@@ -13,7 +13,7 @@ Booking always happens on the official IRCTC site/app; RailVaani deep-links ther
 
 - [x] Milestone 1: scaffold + data layer
 - [x] Milestone 2: split-journey engine (pure TS + unit tests)
-- [x] Milestone 3 (in progress): working search UI preview (voice button, results, availability chips)
+- [x] Milestone 3 (in progress): working search UI preview (voice button, results, availability chips, search/results routing)
 - [ ] Milestone 3 (remaining): Node API endpoints + LLM intent parsing, full i18n
 - [ ] Milestone 4: results / split / preferences UI
 - [ ] Milestone 5: accessibility + testing pass (axe-core, Playwright keyboard flows)

@@ -25,7 +25,10 @@ test('example chip sets matching badges and swap moves them with the fields', as
   const [fromCode, fromName] = from as [string, string];
   const [toCode, toName] = to as [string, string];
 
+  // The chip submits and lands on /results; Back restores the filled form.
   await page.getByRole('button', { name: /Varanasi.*Lucknow/ }).click();
+  await expect(page).toHaveURL(/\/results\?/);
+  await page.goBack();
 
   const fromBox = page.locator('input#from');
   const toBox = page.locator('input#to');

@@ -5,7 +5,10 @@ test('swap button is visible and usable on mobile', async ({ page }) => {
   const swap = page.locator('button[aria-label="Swap origin and destination"]');
   await expect(swap).toBeVisible();
 
+  // The chip submits and lands on /results; Back restores the filled form.
   await page.getByRole('button', { name: /Varanasi.*Lucknow/ }).click();
+  await expect(page).toHaveURL(/\/results\?/);
+  await page.goBack();
   const from = page.locator('input#from');
   const to = page.locator('input#to');
   await expect(from).toHaveValue('Varanasi City');
