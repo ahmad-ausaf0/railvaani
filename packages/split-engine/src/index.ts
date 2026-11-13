@@ -10,6 +10,8 @@ import {
 const DEFAULT_MIN_CONNECTION = 90;
 const DEFAULT_MAX_CONNECTION = 480;
 const DEFAULT_MAX_RESULTS = 8;
+const DEFAULT_MAX_DIRECTS = 20;
+const DEFAULT_MAX_SPLITS = 8;
 const DEFERRED_REFINE_MIN = 14;
 
 /** What the user asked the engine for. */
@@ -31,7 +33,12 @@ export interface SplitQuery {
   maxConnectionMins?: number;
   /** Explicit hub station codes. Overrides provider station enumeration. */
   hubs?: string[];
-  /** Cap on returned options. Default 8. */
+  /** Cap on returned direct options. Default 20. Ignored when maxResults is set. */
+  maxDirects?: number;
+  /** Cap on returned split options. Default 8. Ignored when maxResults is set. */
+  maxSplits?: number;
+  /** Legacy single cap over the combined list. When set, maxDirects and maxSplits
+   *  are ignored so old callers keep today's behaviour. */
   maxResults?: number;
   /**
    * Hide trains whose departure on the journey date has already passed
@@ -258,7 +265,9 @@ export async function findOptions(
   const quota: Quota = query.quota ?? 'GN';
   const minConn = query.minConnectionMins ?? DEFAULT_MIN_CONNECTION;
   const maxConn = query.maxConnectionMins ?? DEFAULT_MAX_CONNECTION;
-  const maxResults = query.maxResults ?? DEFAULT_MAX_RESULTS;
+  const legacyMax = query.maxResults;
+  const maxDirects = query.maxDirects ?? DEFAULT_MAX_DIRECTS;
+  const maxSplits = query.maxSplits ?? DEFAULT_MAX_SPLITS;
   const availabilityMode = query.availabilityMode ?? 'eager';
   const withAvailability = availabilityMode !== 'deferred';
   const nowIst = istNow(Date.now());
@@ -358,7 +367,10 @@ export async function findOptions(
   // Deferred availability: refine the top slice only, then re-rank. Options below
   // the slice keep NOT_AVAILABLE and rank as unbookable.
   if (!withAvailability) {
-    const refineCount = Math.min(deduped.length, Math.max(maxResults * 2, DEFERRED_REFINE_MIN));
+    const refineCount = Math.min(
+      deduped.length,
+      Math.max(legacyMax !== undefined ? legacyMax * 2 : maxDirects + maxSplits, DEFERRED_REFINE_MIN),
+    );
     const slice = deduped.slice(0, refineCount);
     // One availability lookup per unique train+date: split options share legs,
     // and the provider caches per train+date, so dedupe before the fan-out.
@@ -385,5 +397,10 @@ export async function findOptions(
   }
 
   const filtered = query.onlyWithinBudget ? deduped.filter((o) => o.withinBudget) : deduped;
-  return filtered.slice(0, maxResults);
+  if (legacyMax !== undefined) {
+    return filtered.slice(0, legacyMax);
+  }
+  const directs = filtered.filter((o) => o.type === 'direct').slice(0, maxDirects);
+  const splits = filtered.filter((o) => o.type === 'split').slice(0, maxSplits);
+  return [...directs, ...splits];
 }

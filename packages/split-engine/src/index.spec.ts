@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Availability, MockTrainProvider } from '@railvaani/train-core';
+import {
+  Availability,
+  MockTrainProvider,
+  Station,
+  Stop,
+  Train,
+  TrainDataProvider,
+} from '@railvaani/train-core';
 
 import { findOptions, SplitOption } from './index';
 
@@ -156,4 +163,95 @@ test('a provider whose availability check throws a network error still returns o
     }
     assert.equal(o.bookable, false);
   }
+});
+
+/** Minimal provider over a fixed train list, for cap tests the seed cannot express. */
+function makeCapProvider(directCount: number, hubCount: number): TrainDataProvider {
+  const trains: Train[] = [];
+  const hhmm = (mins: number): string =>
+    `${String(Math.floor(mins / 60) % 24).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`;
+  const toMins = (t: string): number => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+  const ALL = [1, 2, 3, 4, 5, 6, 7];
+  for (let i = 0; i < directCount; i += 1) {
+    trains.push({
+      number: `D${String(i).padStart(2, '0')}`,
+      name: `Direct ${i}`,
+      runsOn: ALL,
+      from: 'GKP',
+      to: 'NDLS',
+      depTime: hhmm(300 + i * 10),
+      arrTime: hhmm(300 + i * 10 + 600),
+      durationMins: 600,
+    });
+  }
+  for (let h = 0; h < hubCount; h += 1) {
+    const hub = `H${h + 1}`;
+    trains.push({
+      number: `S${h + 1}A`,
+      name: `Leg one ${h + 1}`,
+      runsOn: ALL,
+      from: 'GKP',
+      to: hub,
+      depTime: '06:00',
+      arrTime: '10:00',
+      durationMins: 240,
+    });
+    trains.push({
+      number: `S${h + 1}B`,
+      name: `Leg two ${h + 1}`,
+      runsOn: ALL,
+      from: hub,
+      to: 'NDLS',
+      depTime: '11:30',
+      arrTime: '15:30',
+      durationMins: 240,
+    });
+  }
+  return {
+    async searchTrains(from: string, to: string): Promise<Train[]> {
+      return trains
+        .filter((t) => t.from === from && t.to === to)
+        .sort((a, b) => toMins(a.depTime) - toMins(b.depTime));
+    },
+    async getAvailability(): Promise<Availability> {
+      return { state: 'AVAILABLE', count: 50 };
+    },
+    async getFare(): Promise<number> {
+      return 450;
+    },
+    async getRoute(): Promise<Stop[]> {
+      return [];
+    },
+    async searchStations(): Promise<Station[]> {
+      return [];
+    },
+    async listStations(): Promise<Station[]> {
+      return [];
+    },
+  };
+}
+
+test('per-type caps: three splits survive alongside fifteen directs', async () => {
+  const p2 = makeCapProvider(15, 3);
+  const opts = await findOptions(p2, {
+    from: 'GKP',
+    to: 'NDLS',
+    date: DATE,
+    cls: 'SL',
+    hubs: ['H1', 'H2', 'H3'],
+  });
+  const directs = opts.filter((o) => o.type === 'direct');
+  const splits = opts.filter((o) => o.type === 'split');
+  assert.equal(directs.length, 15, 'all fifteen directs are returned');
+  assert.equal(splits.length, 3, 'the splits are not crowded out by directs');
+  assert.equal(opts.length, 18);
+  assert.deepEqual(splits.map((o) => o.hub), ['H1', 'H2', 'H3']);
+  assert.ok(opts.slice(0, 15).every((o) => o.type === 'direct'), 'directs still come first');
+});
+
+test('per-type caps: twenty-five directs return exactly twenty', async () => {
+  const p2 = makeCapProvider(25, 0);
+  const opts = await findOptions(p2, { from: 'GKP', to: 'NDLS', date: DATE, cls: 'SL', hubs: [] });
+  assert.equal(opts.length, 20);
+  assert.ok(opts.every((o) => o.type === 'direct'));
 });

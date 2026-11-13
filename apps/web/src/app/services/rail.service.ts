@@ -54,7 +54,8 @@ export class RailService {
       quota: 'GN',
       budgetPerHead,
       availabilityMode: 'deferred',
-      maxResults: 12,
+      maxDirects: 20,
+      maxSplits: 8,
       excludeDeparted: true,
       onProgress: onProgress
         ? (stage, done, total) => onProgress({ stage, done, total })
