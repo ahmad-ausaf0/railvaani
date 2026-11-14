@@ -1,10 +1,12 @@
 import {
   Availability,
+  CLASS_LABELS,
   ProviderError,
   Quota,
   Train,
   TrainDataProvider,
   TrainClass,
+  SearchClass,
 } from '@railvaani/train-core';
 
 /** Station-coordinate lookup, loaded on demand so the ~127 kB map stays out
@@ -47,7 +49,9 @@ export interface SplitQuery {
   to: string;
   /** YYYY-MM-DD, departure date of the FIRST leg. */
   date: string;
-  cls: TrainClass;
+  /** One real class applied to every leg, or 'ANY': each option then picks
+   *  its cheapest bookable class, and a split may mix classes across legs. */
+  cls: SearchClass;
   /** Default 'GN'. */
   quota?: Quota;
   /** Per-head budget in rupees. Options over it stay in the list but rank last. */
@@ -84,6 +88,13 @@ export interface SplitQuery {
   availabilityMode?: 'eager' | 'deferred';
 }
 
+/** One class's fare and seat status on a leg, in Any-class mode. */
+export interface LegClassOption {
+  cls: TrainClass;
+  fare: number;
+  availability: Availability;
+}
+
 /** One booked segment of an option. */
 export interface SplitLeg {
   trainNumber: string;
@@ -96,6 +107,14 @@ export interface SplitLeg {
   arrTime: string;
   fare: number;
   availability: Availability;
+  /** The class this leg's fare/availability are for. Undefined in
+   *  single-class mode (the query's class applies to every leg); set in
+   *  Any-class mode, where each option picks its own class per leg. */
+  cls?: TrainClass;
+  /** Any-class mode only: every class the train carries on this leg,
+   *  cheapest first. The array is shared by every option carrying this
+   *  leg, so one availability lookup serves them all. */
+  perClass?: LegClassOption[];
 }
 
 /** One complete option: a direct train, or a two-leg split via one hub. */
@@ -293,6 +312,186 @@ async function safeAvailability(
   }
 }
 
+/** A seat status a ticket can actually be booked in today. */
+function isBookable(a: Availability): boolean {
+  return a.state === 'AVAILABLE' || a.state === 'RAC';
+}
+
+/** Every class the data layer knows, in CLASS_LABELS order. */
+const ALL_CLASSES = Object.keys(CLASS_LABELS) as TrainClass[];
+const NO_SEATS: Availability = { state: 'NOT_AVAILABLE', count: 0 };
+
+/**
+ * Any-class mode headline pick: the cheapest class with a bookable status
+ * (Available or RAC). When every class is waitlisted or unavailable, the
+ * cheapest class fare is the headline and the stamps say so honestly.
+ */
+function pickHeadline(perClass: LegClassOption[]): LegClassOption | null {
+  if (perClass.length === 0) return null;
+  const bookable = perClass.filter((e) => isBookable(e.availability));
+  const pool = bookable.length > 0 ? bookable : perClass;
+  return pool.reduce((min, e) => (e.fare < min.fare ? e : min), pool[0]!);
+}
+
+/** Rebuilds a leg around one class: that class's fare and seat status. The
+ *  per-class list stays the shared source, so sibling options that picked a
+ *  different class for the same leg keep seeing the same data. */
+function withPick(leg: SplitLeg, cls: TrainClass): SplitLeg {
+  const entry = leg.perClass?.find((e) => e.cls === cls);
+  if (!entry) return leg;
+  return { ...leg, cls, fare: entry.fare, availability: entry.availability };
+}
+
+/** Any mode, a direct: the cached leg cloned around its headline class. */
+function pickAnyLeg(leg: SplitLeg): SplitLeg {
+  const head = pickHeadline(leg.perClass ?? []);
+  return head ? withPick(leg, head.cls) : leg;
+}
+
+/**
+ * Any mode, a split: the cheapest class bookable on BOTH legs when one
+ * exists; the common class is preferred even when a mixed pair of
+ * single-leg picks would total less. With none bookable on both, each leg
+ * takes its own cheapest bookable class: a mixed split, labelled per leg.
+ */
+function pickSplitClasses(
+  l1: SplitLeg,
+  l2: SplitLeg,
+): { c1: TrainClass; c2: TrainClass; mixed: boolean } | null {
+  const p1 = l1.perClass;
+  const p2 = l2.perClass;
+  if (!p1?.length || !p2?.length) return null;
+  let best: { c1: TrainClass; c2: TrainClass; fare: number } | null = null;
+  for (const e1 of p1) {
+    if (!isBookable(e1.availability)) continue;
+    const e2 = p2.find((x) => x.cls === e1.cls);
+    if (!e2 || !isBookable(e2.availability)) continue;
+    const fare = e1.fare + e2.fare;
+    if (!best || fare < best.fare) best = { c1: e1.cls, c2: e2.cls, fare };
+  }
+  if (best) return { c1: best.c1, c2: best.c2, mixed: false };
+  const h1 = pickHeadline(p1);
+  const h2 = pickHeadline(p2);
+  if (!h1 || !h2) return null;
+  return { c1: h1.cls, c2: h2.cls, mixed: true };
+}
+
+/** Any mode, a split: each cached leg cloned around its picked class. */
+function pickSplitLegs(l1: SplitLeg, l2: SplitLeg): [SplitLeg, SplitLeg] {
+  const pick = pickSplitClasses(l1, l2);
+  return pick ? [withPick(l1, pick.c1), withPick(l2, pick.c2)] : [l1, l2];
+}
+
+/** Any mode, deferred refine: seat status has landed for this option's
+ *  legs; re-run its class picks, then recompute the total and the budget
+ *  verdict so ranking and filtering read the picked fares. */
+function rePickAny(opt: SplitOption, budget: number | undefined): void {
+  if (opt.type === 'direct') {
+    const leg = opt.legs[0]!;
+    const head = pickHeadline(leg.perClass ?? []);
+    if (!head) return;
+    leg.cls = head.cls;
+    leg.fare = head.fare;
+    leg.availability = head.availability;
+    opt.totalFare = head.fare;
+    opt.explanation = `${leg.trainNumber} ${leg.trainName} direct, Rs ${leg.fare}`;
+  } else {
+    const [l1, l2] = opt.legs;
+    if (!l1 || !l2) return;
+    const pick = pickSplitClasses(l1, l2);
+    if (!pick) return;
+    const e1 = l1.perClass!.find((e) => e.cls === pick.c1)!;
+    const e2 = l2.perClass!.find((e) => e.cls === pick.c2)!;
+    l1.cls = pick.c1;
+    l1.fare = e1.fare;
+    l1.availability = e1.availability;
+    l2.cls = pick.c2;
+    l2.fare = e2.fare;
+    l2.availability = e2.availability;
+    opt.totalFare = l1.fare + l2.fare;
+    const changePoint =
+      l1.to === l2.from ? `at ${l1.to}` : `at ${l1.to} -> ${l2.from} (change stations)`;
+    opt.explanation = `Via ${opt.hub}: ${l1.trainNumber} ${l1.from}-${l1.to} + ${l2.trainNumber} ${l2.from}-${l2.to}, Rs ${opt.totalFare}, ${fmtGap(opt.connectionMins ?? 0)} ${changePoint}`;
+  }
+  opt.withinBudget = budget === undefined ? true : opt.totalFare <= budget;
+}
+
+/**
+ * Any-class mode: builds one leg carrying every class's fare and seat
+ * status. Fares come from the provider's cached per-class table; when that
+ * is empty the per-class fare lookups run (a live provider's first fare
+ * call warms its cache, so this stays one network round trip in practice).
+ * Availability comes from the provider's all-classes lookup when one is
+ * requested; the deferred refine fills it in later otherwise.
+ */
+async function buildLegAny(
+  provider: TrainDataProvider,
+  t: Train,
+  date: string,
+  quota: Quota,
+  withAvailability = true,
+): Promise<SplitLeg | null> {
+  let table = provider.getFareTable?.(t.number, t.from, t.to) ?? {};
+  let entries: { cls: TrainClass; fare: number }[] = ALL_CLASSES.map((cls) => ({
+    cls,
+    fare: table[cls],
+  })).filter((e): e is { cls: TrainClass; fare: number } => typeof e.fare === 'number' && e.fare > 0);
+  if (entries.length === 0) {
+    entries = [];
+    for (const cls of ALL_CLASSES) {
+      const fare = await safeFare(provider, t.number, t.from, t.to, cls, quota);
+      if (fare !== null && fare > 0) entries.push({ cls, fare });
+    }
+  }
+  if (entries.length === 0) return null;
+  entries.sort((a, b) => a.fare - b.fare);
+  const perClass: LegClassOption[] = entries.map((e) => ({
+    cls: e.cls,
+    fare: e.fare,
+    availability: { ...NO_SEATS },
+  }));
+  if (withAvailability) {
+    const all = await safeAvailabilityAll(provider, t.number, date);
+    if (all) {
+      for (const e of perClass) {
+        const a = all[e.cls];
+        if (a) e.availability = a;
+      }
+    }
+  }
+  const head = pickHeadline(perClass)!;
+  return {
+    trainNumber: t.number,
+    trainName: t.name,
+    from: t.from,
+    to: t.to,
+    date,
+    depTime: t.depTime,
+    arrTime: t.arrTime,
+    fare: head.fare,
+    availability: head.availability,
+    cls: head.cls,
+    perClass,
+  };
+}
+
+/** Every class's seat status for one train+date, or null when the provider
+ *  has no all-classes lookup or it fails: the leg then stays unchecked. */
+async function safeAvailabilityAll(
+  provider: TrainDataProvider,
+  trainNo: string,
+  date: string,
+): Promise<Partial<Record<string, Availability>> | null> {
+  if (typeof provider.getAvailabilityAll !== 'function') return null;
+  try {
+    return await provider.getAvailabilityAll(trainNo, date);
+  } catch (e) {
+    if (e instanceof ProviderError) return null;
+    if (e instanceof TypeError) return null;
+    throw e;
+  }
+}
+
 async function buildLeg(
   provider: TrainDataProvider,
   t: Train,
@@ -388,6 +587,7 @@ export async function findOptions(
   const maxSplits = query.maxSplits ?? DEFAULT_MAX_SPLITS;
   const availabilityMode = query.availabilityMode ?? 'eager';
   const withAvailability = availabilityMode !== 'deferred';
+  const anyMode = query.cls === 'ANY';
   const nowIst = istNow(Date.now());
   const alreadyLeft = (date: string, depTime: string): boolean =>
     query.excludeDeparted === true &&
@@ -405,7 +605,9 @@ export async function findOptions(
     const key = `${t.number}|${date}|${t.from}|${t.to}`;
     let p = legCache.get(key);
     if (!p) {
-      p = buildLeg(provider, t, date, query.cls, quota, withAvailability);
+      p = anyMode
+        ? buildLegAny(provider, t, date, quota, withAvailability)
+        : buildLeg(provider, t, date, query.cls as TrainClass, quota, withAvailability);
       legCache.set(key, p);
     }
     return p;
@@ -415,8 +617,9 @@ export async function findOptions(
   const directTrains = (await provider.searchTrains(query.from, query.to, query.date))
     .filter((t) => !alreadyLeft(query.date, t.depTime));
   for (const t of directTrains) {
-    const leg = await legFor(t, query.date);
-    if (!leg) continue;
+    const srcLeg = await legFor(t, query.date);
+    if (!srcLeg) continue;
+    const leg = anyMode ? pickAnyLeg(srcLeg) : srcLeg;
     const opt = makeOption([leg], t.durationMins, undefined, undefined);
     recomputeOptionVerdicts(opt);
     opt.explanation = `${t.number} ${t.name} direct, Rs ${leg.fare}`;
@@ -510,10 +713,11 @@ export async function findOptions(
             const dep2 = shift * 1440 + departureAbs(t2);
             const conn = dep2 - arrivalAbs(t1);
             if (conn < minConn || conn > maxConn) continue;
-            const leg1 = await legFor(t1, query.date);
-            if (!leg1) continue;
-            const leg2 = await legFor(t2, date2);
-            if (!leg2) continue;
+            const src1 = await legFor(t1, query.date);
+            if (!src1) continue;
+            const src2 = await legFor(t2, date2);
+            if (!src2) continue;
+            const [leg1, leg2] = anyMode ? pickSplitLegs(src1, src2) : [src1, src2];
             const opt = makeOption([leg1, leg2], dep2 + t2.durationMins - departureAbs(t1), hub, conn);
             recomputeOptionVerdicts(opt);
             const changePoint =
@@ -566,14 +770,30 @@ export async function findOptions(
     let done = 0;
     query.onProgress?.('checking_seats', 0, jobs.length);
     await pMap(jobs, async (leg) => {
-      const avail = await safeAvailability(
-        provider, leg.trainNumber, leg.from, leg.to, leg.date, query.cls, quota,
-      );
-      if (avail) leg.availability = avail;
+      if (leg.perClass) {
+        // Any mode: one lookup brings every class's seats. Write into the
+        // shared per-class list; each option then re-picks its own class
+        // below, since sibling options sharing the leg may pick differently.
+        const all = await safeAvailabilityAll(provider, leg.trainNumber, leg.date);
+        if (all) {
+          for (const e of leg.perClass) {
+            const a = all[e.cls];
+            if (a) e.availability = a;
+          }
+        }
+      } else {
+        const avail = await safeAvailability(
+          provider, leg.trainNumber, leg.from, leg.to, leg.date, query.cls as TrainClass, quota,
+        );
+        if (avail) leg.availability = avail;
+      }
       done += 1;
       query.onProgress?.('checking_seats', done, jobs.length);
     }, 4);
-    for (const opt of slice) recomputeOptionVerdicts(opt);
+    for (const opt of slice) {
+      if (anyMode) rePickAny(opt, budget);
+      recomputeOptionVerdicts(opt);
+    }
     deduped.sort(compareOptions);
   }
 

@@ -16,6 +16,9 @@ export interface Station {
 }
 
 export type TrainClass = 'SL' | '3A' | '3E' | '2A' | '1A' | 'CC' | '2S';
+
+/** What a search asks for: one real class, or 'ANY' for every class at once. */
+export type SearchClass = TrainClass | 'ANY';
 export type Quota = 'GN' | 'TQ' | 'SR' | 'LD' | 'HP';
 
 export type AvailabilityState =

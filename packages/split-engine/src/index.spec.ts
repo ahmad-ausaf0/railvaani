@@ -4,10 +4,12 @@ import test from 'node:test';
 import {
   Availability,
   MockTrainProvider,
+  ProviderError,
   Station,
   Stop,
   Train,
   TrainDataProvider,
+  TrainClass,
 } from '@railvaani/train-core';
 import { stationCoord } from '@railvaani/train-core/station-coordinates';
 
@@ -266,6 +268,9 @@ interface FakeTrain {
   depTime: string;
   durationMins: number;
   serves?: [string, string];
+  /** Any-class mode fixtures: per-class fares and per-class seat status. */
+  fares?: Partial<Record<TrainClass, number>>;
+  availAll?: Partial<Record<string, Availability>>;
 }
 
 /** Provider over a fixed train list with call counters, for geo and
@@ -307,6 +312,18 @@ function makeGeoProvider(
     async getFare(trainNo: string, from: string, to: string): Promise<number> {
       bump(fareCalls, `${trainNo}|${from}|${to}`);
       return 450;
+    },
+    getFareTable(trainNo: string, from: string, to: string): Partial<Record<string, number>> {
+      const t = trains.find((x) => {
+        const [sf, st] = x.serves ?? [x.from, x.to];
+        return x.number === trainNo && sf === from && st === to;
+      });
+      return t?.fares ?? {};
+    },
+    async getAvailabilityAll(trainNo: string): Promise<Partial<Record<string, Availability>>> {
+      const t = trains.find((x) => x.number === trainNo);
+      if (!t?.availAll) throw new ProviderError('no_seats', `no per-class data for ${trainNo}`);
+      return t.availAll;
     },
     async getRoute(): Promise<Stop[]> {
       return [];
@@ -510,4 +527,97 @@ test('origin loops: no split boards its second leg at the origin or its city clu
     hubs: ['HUBOK'],
   });
   assert.equal(okOpts.filter((o) => o.type === 'split').length, 1, 'a hub outside the origin cluster still splits');
+});
+
+test('any class: split prefers the cheapest class bookable on both legs', async () => {
+  // Sleeper is cheap and open on leg 1 but waitlisted on leg 2, so the cheapest
+  // COMMON bookable class is 3A. A mixed pair (SL + 3A = 890) would total less;
+  // the common class must still win.
+  const { provider } = makeGeoProvider([
+    { number: 'L1', from: 'AAA', to: 'HUB', depTime: '06:00', durationMins: 240,
+      fares: { SL: 235, '3A': 625 },
+      availAll: { SL: { state: 'AVAILABLE', count: 50 }, '3A': { state: 'RAC', count: 4 } } },
+    { number: 'L2', from: 'HUB', to: 'ZZZ', depTime: '12:00', durationMins: 240,
+      fares: { SL: 245, '3A': 655 },
+      availAll: { SL: { state: 'WL', count: 12, wlPrefix: 'GNWL12' }, '3A': { state: 'AVAILABLE', count: 50 } } },
+  ]);
+  const opts = await findOptions(provider, { from: 'AAA', to: 'ZZZ', date: '2026-12-01', cls: 'ANY', hubs: ['HUB'] });
+  const split = opts.find((o) => o.type === 'split');
+  assert.ok(split, 'split option exists');
+  assert.equal(split.legs[0]!.cls, '3A');
+  assert.equal(split.legs[1]!.cls, '3A');
+  assert.equal(split.totalFare, 1280);
+  assert.equal(split.bookable, true);
+});
+
+test('any class: no common bookable class falls back to a labelled mixed split', async () => {
+  // Sleeper is bookable only on leg 1, 3A only on leg 2. No class is bookable
+  // on both, so each leg takes its own cheapest bookable class and the option
+  // carries them per leg.
+  const { provider } = makeGeoProvider([
+    { number: 'M1', from: 'AAA', to: 'HUB', depTime: '06:00', durationMins: 240,
+      fares: { SL: 235, '3A': 625 },
+      availAll: { SL: { state: 'AVAILABLE', count: 50 }, '3A': { state: 'WL', count: 3, wlPrefix: 'GNWL3' } } },
+    { number: 'M2', from: 'HUB', to: 'ZZZ', depTime: '12:00', durationMins: 240,
+      fares: { SL: 245, '3A': 655 },
+      availAll: { SL: { state: 'WL', count: 12, wlPrefix: 'GNWL12' }, '3A': { state: 'AVAILABLE', count: 50 } } },
+  ]);
+  const opts = await findOptions(provider, { from: 'AAA', to: 'ZZZ', date: '2026-12-01', cls: 'ANY', hubs: ['HUB'] });
+  const split = opts.find((o) => o.type === 'split');
+  assert.ok(split, 'split option exists');
+  assert.equal(split.legs[0]!.cls, 'SL');
+  assert.equal(split.legs[1]!.cls, '3A');
+  assert.equal(split.legs[0]!.fare, 235);
+  assert.equal(split.legs[1]!.fare, 655);
+  assert.equal(split.totalFare, 890);
+  assert.equal(split.bookable, true);
+});
+
+test('any class: budget applies to the picked split total', async () => {
+  const make = () => makeGeoProvider([
+    { number: 'M1', from: 'AAA', to: 'HUB', depTime: '06:00', durationMins: 240,
+      fares: { SL: 235, '3A': 625 },
+      availAll: { SL: { state: 'AVAILABLE', count: 50 }, '3A': { state: 'WL', count: 3, wlPrefix: 'GNWL3' } } },
+    { number: 'M2', from: 'HUB', to: 'ZZZ', depTime: '12:00', durationMins: 240,
+      fares: { SL: 245, '3A': 655 },
+      availAll: { SL: { state: 'WL', count: 12, wlPrefix: 'GNWL12' }, '3A': { state: 'AVAILABLE', count: 50 } } },
+  ]);
+  const within = await findOptions(make().provider, {
+    from: 'AAA', to: 'ZZZ', date: '2026-12-01', cls: 'ANY', hubs: ['HUB'], budgetPerHead: 900,
+  });
+  assert.equal(within.find((o) => o.type === 'split')!.withinBudget, true, '890 total fits a 900 budget');
+  const over = await findOptions(make().provider, {
+    from: 'AAA', to: 'ZZZ', date: '2026-12-01', cls: 'ANY', hubs: ['HUB'], budgetPerHead: 800,
+  });
+  assert.equal(over.find((o) => o.type === 'split')!.withinBudget, false, '890 total busts an 800 budget');
+});
+
+test('any class: direct headline is the cheapest bookable class, honestly labelled otherwise', async () => {
+  const { provider } = makeGeoProvider([
+    { number: 'D1', from: 'AAA', to: 'ZZZ', depTime: '06:00', durationMins: 300,
+      fares: { SL: 235, '3A': 625 },
+      availAll: { SL: { state: 'AVAILABLE', count: 50 }, '3A': { state: 'WL', count: 9, wlPrefix: 'GNWL9' } } },
+    { number: 'D2', from: 'AAA', to: 'ZZZ', depTime: '09:00', durationMins: 300,
+      fares: { SL: 235, '3A': 625 },
+      availAll: { SL: { state: 'WL', count: 9, wlPrefix: 'GNWL9' }, '3A': { state: 'WL', count: 20, wlPrefix: 'GNWL20' } } },
+  ]);
+  const opts = await findOptions(provider, { from: 'AAA', to: 'ZZZ', date: '2026-12-01', cls: 'ANY' });
+  const d1 = opts.find((o) => o.type === 'direct' && o.legs[0]!.trainNumber === 'D1');
+  const d2 = opts.find((o) => o.type === 'direct' && o.legs[0]!.trainNumber === 'D2');
+  assert.ok(d1 && d2, 'both directs returned');
+  // D1: the headline is the cheapest bookable class (Sleeper), not a flat fare.
+  assert.equal(d1.legs[0]!.cls, 'SL');
+  assert.equal(d1.totalFare, 235);
+  assert.equal(d1.bookable, true);
+  assert.deepEqual(
+    d1.legs[0]!.perClass?.map((e) => [e.cls, e.fare]),
+    [['SL', 235], ['3A', 625]],
+    'per-class list rides on the leg, cheapest first',
+  );
+  // D2: every class waitlisted, so the headline falls back to the cheapest fare
+  // and the stamp says so honestly.
+  assert.equal(d2.legs[0]!.cls, 'SL');
+  assert.equal(d2.legs[0]!.availability.state, 'WL');
+  assert.equal(d2.totalFare, 235);
+  assert.equal(d2.bookable, false);
 });
