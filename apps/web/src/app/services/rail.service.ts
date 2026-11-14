@@ -1,6 +1,6 @@
 import { Injectable } from '@angular/core';
 
-import { Availability, ConfirmTktProvider, ErailProvider, Station, TrainClass } from '@railvaani/train-core';
+import { Availability, ConfirmTktProvider, ErailProvider, Station, SearchClass, TrainClass } from '@railvaani/train-core';
 import { findOptions, SplitOption } from '@railvaani/split-engine';
 
 /** Live progress the UI shows while a search runs. */
@@ -42,7 +42,7 @@ export class RailService {
     from: string,
     to: string,
     date: string,
-    cls: TrainClass,
+    cls: SearchClass,
     budgetPerHead?: number,
     onProgress?: (p: SearchProgress) => void,
   ): Promise<SplitOption[]> {

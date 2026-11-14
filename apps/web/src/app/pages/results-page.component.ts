@@ -58,7 +58,7 @@ import { classLabel } from '../shared/train-classes';
               @for (o of direct(); track trackKey(o)) {
                 <rv-option-card [option]="o" [classDetail]="classDetailFor(o)"
                   [dateWise]="classDetailFor(o)?.dateWise" [dateWiseDates]="classDetailFor(o)?.dateWiseDates"
-                  [dateWiseLabel]="clsName()" [clsCode]="params()?.cls ?? ''" [clsLabel]="clsName()" [budget]="budgetNum()" />
+                  [dateWiseLabel]="dateWiseLabelFor(o)" [clsCode]="params()?.cls ?? ''" [clsLabel]="clsName()" [budget]="budgetNum()" />
               }
             </div>
           } @else {
@@ -156,6 +156,15 @@ export class ResultsPageComponent implements OnInit {
     const p = this.params();
     return p ? classLabel(p.cls) : '';
   });
+
+  /** Label for a card's per-date strip: the searched class, or the headline
+   *  class of a direct option in Any-class mode. */
+  dateWiseLabelFor(o: SplitOption): string {
+    const p = this.params();
+    if (!p) return '';
+    if (p.cls !== 'ANY') return classLabel(p.cls);
+    return classLabel(o.legs[0]?.cls ?? 'SL');
+  }
 
   ngOnInit(): void {
     void this.stations.init().then(() => this.rail.useStations(this.stations.stations()));
@@ -303,7 +312,9 @@ export class ResultsPageComponent implements OnInit {
         details[leg.trainNumber] = {
           fares: this.rail.fareTableFor(leg.trainNumber, leg.from, leg.to),
           avail,
-          dateWise: this.rail.dateWiseFor(leg.trainNumber, leg.from, leg.to, p.cls, dates),
+          dateWise: this.rail.dateWiseFor(
+            leg.trainNumber, leg.from, leg.to, p.cls === 'ANY' ? (leg.cls ?? 'SL') : p.cls, dates,
+          ),
           dateWiseDates: dates,
         };
         this.classDetails.set({ ...details });

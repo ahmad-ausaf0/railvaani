@@ -1,11 +1,14 @@
 import { Component, computed, inject, input } from '@angular/core';
 
 import { Availability, CLASS_LABELS } from '@railvaani/train-core';
-import { SplitOption } from '@railvaani/split-engine';
+import { SplitOption, SplitLeg } from '@railvaani/split-engine';
 
 import { StationsService } from '../services/stations.service';
 import { addDaysISO, arrDayDelta, fmtDuration, fmtShortDate, legDurationMins } from '../shared/leg-times';
 import { splitWaitLabel, stationChangeNote } from '../shared/split-notes';
+import { classChips as buildClassChips } from '../shared/class-chips';
+import { availTone, stampText, stampTone } from '../shared/stamps';
+import { classLabel } from '../shared/train-classes';
 
 /** Per-class fares and seat status for one direct train, fetched by the app. */
 export interface ClassDetail {
@@ -17,44 +20,6 @@ export interface ClassDetail {
   dateWiseDates?: string[];
   /** Label of the class the date strip shows, e.g. 'Sleeper'. */
   dateWiseLabel?: string;
-}
-
-type StampTone = 'rv-stamp-ok' | 'rv-stamp-warn' | 'rv-stamp-bad' | 'rv-stamp-muted';
-type AvailTone = 'rv-avail-ok' | 'rv-avail-warn' | 'rv-avail-bad' | 'rv-avail-muted';
-
-/** Pure presentation: a seat status to its stamp colour class.
- *  Bookable or confirmed green, waitlist amber, regret red, unchecked muted. */
-function stampTone(a?: { state?: string } | null): StampTone {
-  const s = a?.state ?? '';
-  if (s === 'AVAILABLE' || s === 'RAC') return 'rv-stamp-ok';
-  if (s === 'WL') return 'rv-stamp-warn';
-  if (s === 'REGRET' || s === 'NOT_AVAILABLE') return 'rv-stamp-bad';
-  return 'rv-stamp-muted';
-}
-
-/** Pure presentation: the same status as coloured text for table rows. */
-function availTone(a?: { state?: string } | null): AvailTone {
-  const t = stampTone(a);
-  return t === 'rv-stamp-ok' ? 'rv-avail-ok'
-    : t === 'rv-stamp-warn' ? 'rv-avail-warn'
-    : t === 'rv-stamp-bad' ? 'rv-avail-bad'
-    : 'rv-avail-muted';
-}
-
-/** Pure presentation: uppercase stamp text for a seat status. */
-function stampText(a?: { state?: string; count?: number; wlPrefix?: string } | null): string {
-  const s = a?.state ?? '';
-  const count = a?.count ?? 0;
-  if (s === 'AVAILABLE') return count > 0 ? `Available ${count}` : 'Available';
-  if (s === 'RAC') return count > 0 ? `RAC ${count}` : 'RAC';
-  if (s === 'WL') {
-    if (count <= 0) return 'Waitlist';
-    // IRCTC notation, e.g. GNWL104/WL64, so the figure reads like the booking site.
-    return a?.wlPrefix ? `WL ${a.wlPrefix}/${count}` : `WL ${count}`;
-  }
-  if (s === 'REGRET') return 'Regret';
-  if (s === 'NOT_AVAILABLE') return 'Not available';
-  return 'Check seats on IRCTC';
 }
 
 /** One train on a paper ticket stub, or a split journey as two stubs under one banner. */
@@ -96,15 +61,24 @@ function stampText(a?: { state?: string; count?: number; wlPrefix?: string } | n
         <div class="rv-perf" aria-hidden="true"></div>
 
         <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <span class="rv-class-chip">{{ classChip() }}</span>
-          <span class="rv-stamp {{ stampTone(leg().availability) }}" role="status" [attr.title]="asOfTitle(leg().availability)">
-            {{ stampText(leg().availability) }}
-          </span>
+          @if (classChips().length > 0) {
+            @for (chip of classChips(); track chip.cls) {
+              <span class="rv-class-chip">
+                {{ chip.cls }} &#8377;{{ chip.fare }} &middot;
+                <span class="{{ chip.tone }}" role="status" [attr.title]="asOfTitle(chip.availability)">{{ chip.status }}</span>
+              </span>
+            }
+          } @else {
+            <span class="rv-class-chip">{{ classChip() }}</span>
+            <span class="rv-stamp {{ stampTone(leg().availability) }}" role="status" [attr.title]="asOfTitle(leg().availability)">
+              {{ stampText(leg().availability) }}
+            </span>
+          }
         </div>
         <p class="rv-meta">{{ metaLine() }}</p>
         <a [href]="irctcUrl()" target="_blank" rel="noopener" class="rv-link-board mt-1.5">Book on IRCTC &rarr;</a>
 
-        @if (classEntries().length > 1) {
+        @if (classEntries().length > 1 && classChips().length === 0) {
           <div class="rv-subblock">
             <p class="rv-subblock-cap">Availability by class &middot; general quota</p>
             <div class="mt-2 grid gap-1.5 sm:grid-cols-2">
@@ -178,6 +152,7 @@ function stampText(a?: { state?: string; count?: number; wlPrefix?: string } | n
                   <span class="t-soft text-xs tabular-nums">{{ legArrDate(leg) }}</span>
                   <span class="t-soft text-xs font-semibold tabular-nums">{{ fmtDuration(legDur(leg.depTime, leg.arrTime)) }}</span>
                   <span class="t-ink font-bold">&#8377;{{ leg.fare }}</span>
+                  @if (legLabel(leg); as legCls) { <span class="t-soft text-xs font-semibold">{{ legCls }}</span> }
                   <span class="text-xs font-semibold">{{ leg.date === firstDate() ? 'same day' : 'next day' }}</span>
                   <span class="rv-stamp rv-stamp-sm {{ stampTone(leg.availability) }}" role="status" [attr.title]="asOfTitle(leg.availability)">
                     {{ stampText(leg.availability) }}
@@ -190,7 +165,7 @@ function stampText(a?: { state?: string; count?: number; wlPrefix?: string } | n
           <div class="rv-perf" aria-hidden="true"></div>
 
           <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
-            <span class="rv-class-chip">{{ clsLabel() || 'Sleeper' }}</span>
+            <span class="rv-class-chip">{{ splitClsChip() }}</span>
           </div>
           <p class="rv-meta">Two separate tickets, booked one after the other on IRCTC.</p>
           <a [href]="irctcUrl()" target="_blank" rel="noopener" class="rv-link-board mt-1.5">Book both legs on IRCTC &rarr;</a>
@@ -266,6 +241,24 @@ export class OptionCardComponent {
     const label = this.clsLabel() || this.dateWiseLabel();
     const fare = this.classDetail()?.fares[this.clsCode()];
     return fare != null ? `${label} · ₹${fare}` : label;
+  });
+
+  /** Per-class chip row in Any-class mode; empty when the query picked a class. */
+  readonly classChips = computed(() => buildClassChips(this.leg().perClass));
+
+  /** Any-class mode: the picked class's label for a split leg row; '' in single-class mode. */
+  legLabel(leg: SplitLeg): string {
+    return leg.perClass && leg.cls ? classLabel(leg.cls) : '';
+  }
+
+  /** Any-class mode: the classes the two legs were booked in; the searched class otherwise. */
+  readonly splitClsChip = computed(() => {
+    const legs = this.option().legs;
+    if (legs.length === 2 && legs.every((l) => l.perClass && l.cls)) {
+      const labels = legs.map((l) => classLabel(l.cls!));
+      return labels[0] === labels[1] ? labels[0]! : labels.join(' + ');
+    }
+    return this.clsLabel() || 'Sleeper';
   });
 
   /** Snapshot time plus the actual boarding and alighting stations, in words. */

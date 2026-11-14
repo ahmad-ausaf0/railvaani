@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { istToday, parseSearchParams } from './search-params';
+import { isSelectableClass } from './train-classes';
 
 const today = '2026-11-13';
 
@@ -85,4 +86,18 @@ test('rejects a non-numeric budget', () => {
 
 test('istToday returns a YYYY-MM-DD date', () => {
   assert.match(istToday(), /^\d{4}-\d{2}-\d{2}$/);
+});
+
+test('accepts cls=ANY for Any-class searches', () => {
+  const p = parseSearchParams({ from: 'NDLS', to: 'CNB', date: '2026-12-01', cls: 'ANY' }, today);
+  assert.ok(p);
+  assert.equal(p!.cls, 'ANY');
+});
+
+test('Any class round-trips through the URL and Edit search', () => {
+  assert.equal(isSelectableClass('ANY'), true);
+  const p = parseSearchParams({ from: 'NDLS', to: 'CNB', date: '2026-12-01', cls: 'ANY' }, today);
+  assert.ok(p);
+  assert.equal(isSelectableClass(p!.cls), true, 'the parsed class re-validates for the form and the URL');
+  assert.equal(isSelectableClass('XL'), false, 'unknown classes still rejected');
 });

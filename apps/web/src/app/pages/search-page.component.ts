@@ -1,14 +1,15 @@
 import { Component, OnInit, inject, signal } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
 
-import { Station, TrainClass } from '@railvaani/train-core';
+import { Station } from '@railvaani/train-core';
+import type { SearchClass } from '@railvaani/train-core';
 
 import { StationInputComponent } from '../components/station-input.component';
 import { LastSearchService } from '../services/last-search.service';
 import { RailService } from '../services/rail.service';
 import { StationsService } from '../services/stations.service';
 import { VoiceIntentService } from '../services/voice-intent.service';
-import { TRAIN_CLASSES, classLabel } from '../shared/train-classes';
+import { TRAIN_CLASSES, ANY_CLASS, classLabel, isSelectableClass } from '../shared/train-classes';
 import { istToday } from '../shared/search-params';
 
 interface Recognition {
@@ -124,7 +125,7 @@ export class SearchPageComponent implements OnInit {
   private readonly voiceIntent = new VoiceIntentService();
   private readonly lastSearch = inject(LastSearchService);
 
-  readonly classes = TRAIN_CLASSES;
+  readonly classes: SearchClass[] = [ANY_CLASS, ...TRAIN_CLASSES];
   readonly examples: ReadonlyArray<readonly [string, string]> = [
     ['Gorakhpur', 'New Delhi'], ['Patna', 'Mumbai'], ['Varanasi', 'Lucknow'], ['Chennai', 'Bengaluru'],
   ];
@@ -134,7 +135,7 @@ export class SearchPageComponent implements OnInit {
   readonly fromCode = signal<string | null>(null);
   readonly toCode = signal<string | null>(null);
   readonly date = signal('');
-  readonly cls = signal<TrainClass>('SL');
+  readonly cls = signal<SearchClass>('SL');
   readonly budget = signal('');
   readonly listening = signal(false);
   readonly voiceNote = signal('');
@@ -174,14 +175,14 @@ export class SearchPageComponent implements OnInit {
       this.toText.set(this.stations.name(to) || to);
     }
     if (date) this.date.set(date);
-    if ((TRAIN_CLASSES as string[]).includes(clsRaw)) this.cls.set(clsRaw as TrainClass);
+    if (isSelectableClass(clsRaw)) this.cls.set(clsRaw as SearchClass);
     if (budget) this.budget.set(budget);
     if (!this.date()) this.date.set(this.minDate);
   }
 
-  classLabel(c: TrainClass): string { return classLabel(c); }
+  classLabel(c: SearchClass): string { return classLabel(c); }
 
-  setCls(value: string): void { this.cls.set(value as TrainClass); }
+  setCls(value: string): void { this.cls.set(value as SearchClass); }
 
   onFromQuery(q: string): void { this.fromSuggest.set(this.stations.search(q)); }
   onToQuery(q: string): void { this.toSuggest.set(this.stations.search(q)); }

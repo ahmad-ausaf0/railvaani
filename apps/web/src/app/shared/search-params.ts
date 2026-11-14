@@ -1,13 +1,13 @@
-import type { TrainClass } from '@railvaani/train-core';
+import type { SearchClass } from '@railvaani/train-core';
 
-import { TRAIN_CLASSES } from './train-classes';
+import { isSelectableClass } from './train-classes';
 
 /** A validated search, straight from the /results query params. */
 export interface SearchParams {
   from: string;
   to: string;
   date: string;
-  cls: TrainClass;
+  cls: SearchClass;
   quota: string;
   budget?: number;
 }
@@ -30,7 +30,7 @@ export function parseSearchParams(
   const quota = (raw['quota'] ?? '').trim() || 'GN';
   if (!from || !to || from === to) return null;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date < today) return null;
-  if (!(TRAIN_CLASSES as string[]).includes(cls)) return null;
+  if (!isSelectableClass(cls)) return null;
   const budgetRaw = raw['budget']?.trim();
   let budget: number | undefined;
   if (budgetRaw) {
@@ -38,5 +38,5 @@ export function parseSearchParams(
     if (!Number.isFinite(n) || n <= 0) return null;
     budget = n;
   }
-  return { from, to, date, cls: cls as TrainClass, quota, budget };
+  return { from, to, date, cls: cls as SearchClass, quota, budget };
 }
