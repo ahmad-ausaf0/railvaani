@@ -7,4 +7,3 @@ export * from './data/third-party-api-provider';
 export * from './data/erail-provider';
 export * from './data/confirmtkt-provider';
 export * from './data/major-stations';
-export * from './data/station-coordinates';

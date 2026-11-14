@@ -2,11 +2,30 @@ import {
   Availability,
   ProviderError,
   Quota,
-  stationCoord,
   Train,
   TrainDataProvider,
   TrainClass,
 } from '@railvaani/train-core';
+
+/** Station-coordinate lookup, loaded on demand so the ~127 kB map stays out
+ *  of the app's initial bundle. Null also when the load fails: every geo test
+ *  then reads "unknown" and options fall back to unfiltered. */
+type StationCoordLookup = (code: string) => [number, number] | undefined;
+let coordLookup: StationCoordLookup | null = null;
+let coordLookupFailed = false;
+
+async function loadStationCoords(): Promise<StationCoordLookup | null> {
+  if (coordLookupFailed) return null;
+  if (!coordLookup) {
+    try {
+      const mod = await import('@railvaani/train-core/station-coordinates');
+      coordLookup = mod.stationCoord;
+    } catch {
+      coordLookupFailed = true;
+    }
+  }
+  return coordLookup;
+}
 
 const DEFAULT_MIN_CONNECTION = 90;
 const DEFAULT_MAX_CONNECTION = 480;
@@ -18,6 +37,8 @@ const FORWARD_HUB_RADIUS_KM = 150;
 const FORWARD_HUB_PROJECTION_MAX = 0.6;
 const FORWARD_HUB_EXTRA_COUNT = 3;
 const HUB_LIST_CAP = 8;
+const MAX_SPLITS_PER_HUB = 4;
+const ORIGIN_CLUSTER_KM = 6.5;
 const DEFERRED_REFINE_MIN = 14;
 
 /** What the user asked the engine for. */
@@ -180,6 +201,43 @@ function hubKeepsDirection(
   const direct = haversineKm(origin, dest);
   const detour = haversineKm(origin, hub) + haversineKm(hub, dest);
   return detour <= MAX_DETOUR_FACTOR * direct;
+}
+
+/** True when leg two boards at the origin itself or at a twin station within
+ *  the origin's city cluster: Gorakhpur -> Domingarh and then boarding again
+ *  at Gorakhpur is not a split journey, the traveller just boards the second
+ *  train directly. Missing coordinates skip the cluster test, never reject
+ *  on their own. */
+function isOriginLoop(
+  origin: string,
+  leg2From: string,
+  originCoord: [number, number] | undefined,
+  leg2Coord: [number, number] | undefined,
+): boolean {
+  if (origin === leg2From) return true;
+  if (!originCoord || !leg2Coord) return false;
+  return haversineKm(originCoord, leg2Coord) <= ORIGIN_CLUSTER_KM;
+}
+
+/** Fill split slots in ranked order, but no single change station takes more
+ *  than maxPerHub of them: once a station reaches the cap, its remaining
+ *  splits are skipped and the fill continues with other stations. */
+function fillWithHubDiversity(
+  ranked: SplitOption[],
+  maxSplits: number,
+  maxPerHub: number,
+): SplitOption[] {
+  const perHub = new Map<string, number>();
+  const picked: SplitOption[] = [];
+  for (const o of ranked) {
+    if (picked.length >= maxSplits) break;
+    const hub = o.hub ?? '';
+    const taken = perHub.get(hub) ?? 0;
+    if (taken >= maxPerHub) continue;
+    perHub.set(hub, taken + 1);
+    picked.push(o);
+  }
+  return picked;
 }
 
 /** Runs async jobs with bounded concurrency. */
@@ -367,8 +425,9 @@ export async function findOptions(
 
   // Splits via hubs. A provider that knows its best vias supplies them; otherwise
   // every known station is a candidate (mock seed scale).
-  const originCoord = stationCoord(query.from);
-  const destCoord = stationCoord(query.to);
+  const stationCoord = await loadStationCoords();
+  const originCoord = stationCoord?.(query.from);
+  const destCoord = stationCoord?.(query.to);
   let hubs = query.hubs;
   if (!hubs) {
     let suggested: string[] | null = null;
@@ -398,7 +457,7 @@ export async function findOptions(
       // destination, or blowing the crow-flies distance up is never worth a
       // ticket. Stations without coordinates stay: unknown means keep.
       hubs = hubs.filter(
-        (c) => hubKeepsDirection(originCoord, destCoord, stationCoord(c)) !== false,
+        (c) => hubKeepsDirection(originCoord, destCoord, stationCoord?.(c)) !== false,
       );
       // Via suggestions miss nearby forward hubs: Siddharthnagar to Gaya
       // suggested Kanpur, 9h in the wrong direction, and never Gorakhpur,
@@ -410,7 +469,7 @@ export async function findOptions(
       const directKm = haversineKm(originCoord, destCoord);
       for (const s of directory) {
         if (s.code === query.from || s.code === query.to || base.has(s.code)) continue;
-        const h = stationCoord(s.code);
+        const h = stationCoord?.(s.code);
         if (!h) continue;
         const km = haversineKm(originCoord, h);
         if (km > FORWARD_HUB_RADIUS_KM) continue;
@@ -428,7 +487,7 @@ export async function findOptions(
   } else if (originCoord && destCoord) {
     // Explicit hubs respect the same direction and detour tests.
     hubs = hubs.filter(
-      (c) => hubKeepsDirection(originCoord, destCoord, stationCoord(c)) !== false,
+      (c) => hubKeepsDirection(originCoord, destCoord, stationCoord?.(c)) !== false,
     );
   }
   for (const hub of hubs) {
@@ -445,6 +504,9 @@ export async function findOptions(
           for (const t2 of leg2Trains) {
             // Splitting one train's own journey into two tickets adds a fee and nothing else.
             if (t1.number === t2.number) continue;
+            // No origin loops: a second leg boarding at the origin or a twin
+            // station in its city cluster is not a split journey.
+            if (isOriginLoop(query.from, t2.from, originCoord, stationCoord?.(t2.from))) continue;
             const dep2 = shift * 1440 + departureAbs(t2);
             const conn = dep2 - arrivalAbs(t1);
             if (conn < minConn || conn > maxConn) continue;
@@ -520,6 +582,12 @@ export async function findOptions(
     return filtered.slice(0, legacyMax);
   }
   const directs = filtered.filter((o) => o.type === 'direct').slice(0, maxDirects);
-  const splits = filtered.filter((o) => o.type === 'split').slice(0, maxSplits);
+  const splitCandidates = filtered.filter((o) => o.type === 'split');
+  // Hub diversity: with more candidates than slots, no single change station
+  // takes more than four of them, so busy hubs cannot crowd out other routes.
+  const splits =
+    splitCandidates.length <= maxSplits
+      ? splitCandidates
+      : fillWithHubDiversity(splitCandidates, maxSplits, MAX_SPLITS_PER_HUB);
   return [...directs, ...splits];
 }

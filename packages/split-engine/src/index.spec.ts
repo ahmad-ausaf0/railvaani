@@ -4,12 +4,12 @@ import test from 'node:test';
 import {
   Availability,
   MockTrainProvider,
-  stationCoord,
   Station,
   Stop,
   Train,
   TrainDataProvider,
 } from '@railvaani/train-core';
+import { stationCoord } from '@railvaani/train-core/station-coordinates';
 
 import { findOptions, SplitOption } from './index';
 
@@ -413,4 +413,101 @@ test('a split that changes stations ranks below a same-station split', async () 
   // still rank first now that station changes carry a rank cost.
   assert.equal(splits[0]!.legs[1]!.from, 'HUB');
   assert.equal(splits[1]!.legs[1]!.from, 'HUB2');
+});
+
+test('hub diversity: no change station takes more than four split slots', async () => {
+  const viaA: FakeTrain[] = [
+    ['A1', '11:30'],
+    ['A2', '12:00'],
+    ['A3', '12:30'],
+    ['A4', '13:00'],
+    ['A5', '13:30'],
+    ['A6', '14:00'],
+  ].map(([number, depTime]) => ({ number, from: 'AAA1', to: 'ZZZ', depTime, durationMins: 240 }));
+  const viaB: FakeTrain[] = [
+    ['B1', '11:30'],
+    ['B2', '12:00'],
+    ['B3', '12:30'],
+    ['B4', '13:00'],
+  ].map(([number, depTime]) => ({ number, from: 'BBB2', to: 'ZZZ', depTime, durationMins: 240 }));
+  const { provider } = makeGeoProvider(
+    [
+      { number: 'IN-A', from: 'OOO', to: 'AAA1', depTime: '06:00', durationMins: 240 },
+      { number: 'IN-B', from: 'OOO', to: 'BBB2', depTime: '06:00', durationMins: 240 },
+      ...viaA,
+      ...viaB,
+    ],
+    { hubs: ['AAA1', 'BBB2'] },
+  );
+  const opts = await findOptions(provider, {
+    from: 'OOO',
+    to: 'ZZZ',
+    date: DATE,
+    cls: 'SL',
+    hubs: ['AAA1', 'BBB2'],
+  });
+  const splits = opts.filter((o) => o.type === 'split');
+  assert.equal(splits.length, 8, 'ten candidates fill eight slots');
+  assert.equal(splits.filter((o) => o.hub === 'AAA1').length, 4, 'station A capped at four');
+  assert.equal(splits.filter((o) => o.hub === 'BBB2').length, 4, 'station B takes the rest');
+  const durations = splits.map((o) => o.totalDurationMins);
+  assert.deepEqual(
+    [...durations].sort((a, b) => a - b),
+    durations,
+    'picked splits keep the ranked order',
+  );
+  // Fewer candidates than slots: everything shows, the cap does not bite.
+  const scarce = await findOptions(provider, {
+    from: 'OOO',
+    to: 'ZZZ',
+    date: DATE,
+    cls: 'SL',
+    hubs: ['AAA1'],
+  });
+  assert.equal(
+    scarce.filter((o) => o.type === 'split').length,
+    6,
+    'six candidates under eight slots all show',
+  );
+});
+
+test('origin loops: no split boards its second leg at the origin or its city cluster', async () => {
+  // Gorakhpur to Gaya. Hub Domingarh (DMG) sits 4.1 km from Gorakhpur: leg one
+  // hops there, then leg two either boards back at Gorakhpur itself (clustered
+  // provider data) or at Domingarh. Neither is a split journey.
+  const loop = makeGeoProvider(
+    [
+      { number: 'L1', from: 'GKP', to: 'DMG', depTime: '07:00', durationMins: 90 },
+      { number: 'L2', from: 'GKP', to: 'GAYA', depTime: '12:00', durationMins: 600, serves: ['DMG', 'GAYA'] },
+      { number: 'L3', from: 'DMG', to: 'GAYA', depTime: '12:00', durationMins: 600 },
+    ],
+    { hubs: ['DMG'] },
+  );
+  const loopOpts = await findOptions(loop.provider, {
+    from: 'GKP',
+    to: 'GAYA',
+    date: DATE,
+    cls: 'SL',
+    hubs: ['DMG'],
+  });
+  assert.equal(
+    loopOpts.filter((o) => o.type === 'split').length,
+    0,
+    'GKP -> DMG -> (GKP or DMG) is not a split journey',
+  );
+  const ok = makeGeoProvider(
+    [
+      { number: 'T1', from: 'GKP', to: 'HUBOK', depTime: '06:00', durationMins: 240 },
+      { number: 'T2', from: 'HUBOK', to: 'GAYA', depTime: '11:30', durationMins: 240 },
+    ],
+    { hubs: ['HUBOK'] },
+  );
+  const okOpts = await findOptions(ok.provider, {
+    from: 'GKP',
+    to: 'GAYA',
+    date: DATE,
+    cls: 'SL',
+    hubs: ['HUBOK'],
+  });
+  assert.equal(okOpts.filter((o) => o.type === 'split').length, 1, 'a hub outside the origin cluster still splits');
 });
