@@ -40,3 +40,7 @@ Every feature codes against `TrainDataProvider` (packages/train-core/src/train-d
 ## Accessibility
 
 WCAG 2.2 AA baseline, AAA where feasible: keyboard-only operation, visible 3:1 focus, screen-reader announcements for every result and status, never colour alone, plain-language copy (WL/RAC always explained), 48px touch targets, Senior Mode, English + Hindi via Angular i18n. The full checklist ships with Milestone 5.
+
+## Data
+
+- `packages/train-core/src/data/station-coordinates.ts`: code -> [lat, lng] for 8,991 Indian Railways stations, from github.com/prasenjit-27/Indian-Railway-Data `stations.json` (MIT Licence), fetched 14 Nov 2026, rounded to centidegrees. SDDN (missing there) added from Wikipedia. Parsed lazily; stations without coordinates are treated as "unknown", never rejected.

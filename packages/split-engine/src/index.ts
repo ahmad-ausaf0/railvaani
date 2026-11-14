@@ -2,6 +2,7 @@ import {
   Availability,
   ProviderError,
   Quota,
+  stationCoord,
   Train,
   TrainDataProvider,
   TrainClass,
@@ -12,6 +13,11 @@ const DEFAULT_MAX_CONNECTION = 480;
 const DEFAULT_MAX_RESULTS = 8;
 const DEFAULT_MAX_DIRECTS = 20;
 const DEFAULT_MAX_SPLITS = 8;
+const MAX_DETOUR_FACTOR = 1.6;
+const FORWARD_HUB_RADIUS_KM = 150;
+const FORWARD_HUB_PROJECTION_MAX = 0.6;
+const FORWARD_HUB_EXTRA_COUNT = 3;
+const HUB_LIST_CAP = 8;
 const DEFERRED_REFINE_MIN = 14;
 
 /** What the user asked the engine for. */
@@ -129,6 +135,53 @@ function depMinutesOf(depTime: string): number {
   return (Number(h) || 0) * 60 + (Number(m) || 0);
 }
 
+/** Great-circle distance in km (haversine). */
+function haversineKm(a: [number, number], b: [number, number]): number {
+  const rad = Math.PI / 180;
+  const dLat = (b[0] - a[0]) * rad;
+  const dLng = (b[1] - a[1]) * rad;
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(a[0] * rad) * Math.cos(b[0] * rad) * Math.sin(dLng / 2) ** 2;
+  return 2 * 6371 * Math.asin(Math.sqrt(h));
+}
+
+/** Where `hub` sits along the origin->destination axis: 0 at the origin, 1 at
+ *  the destination, negative behind it. A local flat-earth approximation is
+ *  plenty at Indian network distances. */
+function axisProjection(
+  origin: [number, number],
+  dest: [number, number],
+  hub: [number, number],
+): number {
+  const midLat = ((origin[0] + dest[0]) / 2) * (Math.PI / 180);
+  const kx = 111.32 * Math.cos(midLat);
+  const ky = 110.57;
+  const ux = (dest[1] - origin[1]) * kx;
+  const uy = (dest[0] - origin[0]) * ky;
+  const vx = (hub[1] - origin[1]) * kx;
+  const vy = (hub[0] - origin[0]) * ky;
+  const denom = ux * ux + uy * uy;
+  if (denom === 0) return 0;
+  return (vx * ux + vy * uy) / denom;
+}
+
+/** True when the hub keeps the journey pointing the right way and its
+ *  crow-flies detour stays within the cap. undefined when coordinates are
+ *  missing for any of the three stations: no geo data, no rejection. */
+function hubKeepsDirection(
+  origin: [number, number] | undefined,
+  dest: [number, number] | undefined,
+  hub: [number, number] | undefined,
+): boolean | undefined {
+  if (!origin || !dest || !hub) return undefined;
+  const proj = axisProjection(origin, dest, hub);
+  if (proj < 0 || proj > 1.1) return false;
+  const direct = haversineKm(origin, dest);
+  const detour = haversineKm(origin, hub) + haversineKm(hub, dest);
+  return detour <= MAX_DETOUR_FACTOR * direct;
+}
+
 /** Runs async jobs with bounded concurrency. */
 async function pMap<T>(items: T[], fn: (item: T) => Promise<void>, limit: number): Promise<void> {
   let next = 0;
@@ -244,6 +297,13 @@ function recomputeOptionVerdicts(opt: SplitOption): void {
 function compareOptions(a: SplitOption, b: SplitOption): number {
   if (a.withinBudget !== b.withinBudget) return a.withinBudget ? -1 : 1;
   if (a.bookable !== b.bookable) return a.bookable ? -1 : 1;
+  // A split that changes stations mid-journey ranks below one that waits at a
+  // single station: walking between stations is a real cost.
+  if (a.type === 'split' && b.type === 'split') {
+    const aChange = a.legs[0]!.to !== a.legs[1]!.from;
+    const bChange = b.legs[0]!.to !== b.legs[1]!.from;
+    if (aChange !== bChange) return aChange ? 1 : -1;
+  }
   if (a.totalFare !== b.totalFare) return a.totalFare - b.totalFare;
   if (a.totalDurationMins !== b.totalDurationMins) return a.totalDurationMins - b.totalDurationMins;
   if (a.type !== b.type) return a.type === 'direct' ? -1 : 1;
@@ -278,11 +338,26 @@ export async function findOptions(
 
   const options: SplitOption[] = [];
 
+  // One leg, one fetch: the same train+date+segment appears in several split
+  // options (one arrival leg paired with many onward trains). Build it once
+  // and share the object, so every card renders the same availability figure
+  // and no provider call is duplicated.
+  const legCache = new Map<string, Promise<SplitLeg | null>>();
+  const legFor = (t: Train, date: string): Promise<SplitLeg | null> => {
+    const key = `${t.number}|${date}|${t.from}|${t.to}`;
+    let p = legCache.get(key);
+    if (!p) {
+      p = buildLeg(provider, t, date, query.cls, quota, withAvailability);
+      legCache.set(key, p);
+    }
+    return p;
+  };
+
   // Direct trains first.
   const directTrains = (await provider.searchTrains(query.from, query.to, query.date))
     .filter((t) => !alreadyLeft(query.date, t.depTime));
   for (const t of directTrains) {
-    const leg = await buildLeg(provider, t, query.date, query.cls, quota, withAvailability);
+    const leg = await legFor(t, query.date);
     if (!leg) continue;
     const opt = makeOption([leg], t.durationMins, undefined, undefined);
     recomputeOptionVerdicts(opt);
@@ -292,6 +367,8 @@ export async function findOptions(
 
   // Splits via hubs. A provider that knows its best vias supplies them; otherwise
   // every known station is a candidate (mock seed scale).
+  const originCoord = stationCoord(query.from);
+  const destCoord = stationCoord(query.to);
   let hubs = query.hubs;
   if (!hubs) {
     let suggested: string[] | null = null;
@@ -307,7 +384,8 @@ export async function findOptions(
       hubs = suggested.filter((c) => c !== query.from && c !== query.to).slice(0, 8);
     } else if (suggestFailed) {
       // Hub suggestions are an enhancement. When they fail, run direct trains
-      // only rather than enumerating every known station as a hub.
+      // plus any geo-forward extra hubs rather than enumerating every known
+      // station as a hub.
       hubs = [];
     } else {
       const stations = (await provider.listStations()) ?? [];
@@ -315,6 +393,43 @@ export async function findOptions(
         (c) => c !== query.from && c !== query.to,
       );
     }
+    if (originCoord && destCoord) {
+      // Direction and detour tests: a hub behind the origin, beyond the
+      // destination, or blowing the crow-flies distance up is never worth a
+      // ticket. Stations without coordinates stay: unknown means keep.
+      hubs = hubs.filter(
+        (c) => hubKeepsDirection(originCoord, destCoord, stationCoord(c)) !== false,
+      );
+      // Via suggestions miss nearby forward hubs: Siddharthnagar to Gaya
+      // suggested Kanpur, 9h in the wrong direction, and never Gorakhpur,
+      // 65 km towards Gaya. Add up to 3 known stations near the origin that
+      // point the right way, nearest first; the combined list stays capped.
+      const directory = (await provider.listStations().catch(() => [])) ?? [];
+      const base = new Set(hubs);
+      const extras: { code: string; km: number }[] = [];
+      const directKm = haversineKm(originCoord, destCoord);
+      for (const s of directory) {
+        if (s.code === query.from || s.code === query.to || base.has(s.code)) continue;
+        const h = stationCoord(s.code);
+        if (!h) continue;
+        const km = haversineKm(originCoord, h);
+        if (km > FORWARD_HUB_RADIUS_KM) continue;
+        const proj = axisProjection(originCoord, destCoord, h);
+        if (proj < 0 || proj > FORWARD_HUB_PROJECTION_MAX) continue;
+        if (km + haversineKm(h, destCoord) > MAX_DETOUR_FACTOR * directKm) continue;
+        extras.push({ code: s.code, km });
+      }
+      extras.sort((a, b) => a.km - b.km);
+      hubs = [
+        ...hubs.slice(0, HUB_LIST_CAP - FORWARD_HUB_EXTRA_COUNT),
+        ...extras.slice(0, FORWARD_HUB_EXTRA_COUNT).map((e) => e.code),
+      ].slice(0, HUB_LIST_CAP);
+    }
+  } else if (originCoord && destCoord) {
+    // Explicit hubs respect the same direction and detour tests.
+    hubs = hubs.filter(
+      (c) => hubKeepsDirection(originCoord, destCoord, stationCoord(c)) !== false,
+    );
   }
   for (const hub of hubs) {
     // One hub failing (its searches, fares or seat checks) must not affect
@@ -333,13 +448,17 @@ export async function findOptions(
             const dep2 = shift * 1440 + departureAbs(t2);
             const conn = dep2 - arrivalAbs(t1);
             if (conn < minConn || conn > maxConn) continue;
-            const leg1 = await buildLeg(provider, t1, query.date, query.cls, quota, withAvailability);
+            const leg1 = await legFor(t1, query.date);
             if (!leg1) continue;
-            const leg2 = await buildLeg(provider, t2, date2, query.cls, quota, withAvailability);
+            const leg2 = await legFor(t2, date2);
             if (!leg2) continue;
             const opt = makeOption([leg1, leg2], dep2 + t2.durationMins - departureAbs(t1), hub, conn);
             recomputeOptionVerdicts(opt);
-            opt.explanation = `Via ${hub}: ${t1.number} ${query.from}-${hub} + ${t2.number} ${hub}-${query.to}, Rs ${opt.totalFare}, ${fmtGap(conn)} at ${hub}`;
+            const changePoint =
+              t1.to === t2.from
+                ? `at ${t1.to}`
+                : `at ${t1.to} -> ${t2.from} (change stations)`;
+            opt.explanation = `Via ${hub}: ${t1.number} ${query.from}-${hub} + ${t2.number} ${hub}-${query.to}, Rs ${opt.totalFare}, ${fmtGap(conn)} ${changePoint}`;
             options.push(opt);
           }
         }

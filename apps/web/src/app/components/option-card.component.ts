@@ -5,6 +5,7 @@ import { SplitOption } from '@railvaani/split-engine';
 
 import { StationsService } from '../services/stations.service';
 import { addDaysISO, arrDayDelta, fmtDuration, fmtShortDate, legDurationMins } from '../shared/leg-times';
+import { splitWaitLabel, stationChangeNote } from '../shared/split-notes';
 
 /** Per-class fares and seat status for one direct train, fetched by the app. */
 export interface ClassDetail {
@@ -153,8 +154,14 @@ function stampText(a?: { state?: string; count?: number; wlPrefix?: string } | n
               @if ($index > 0) {
                 <li class="rv-via">
                   <span class="rv-via-dot" aria-hidden="true"></span>
-                  <span>Wait {{ fmtDuration(option().connectionMins ?? 0) }} at {{ hub() }}</span>
+                  <span>Wait {{ fmtDuration(option().connectionMins ?? 0) }}{{ changeNote() ? '' : ' at ' + arriveName() }}</span>
                 </li>
+                @if (changeNote(); as change) {
+                  <li class="rv-via">
+                    <span class="rv-via-dot" aria-hidden="true"></span>
+                    <span>{{ change }}</span>
+                  </li>
+                }
               }
               <li>
                 <p class="m-0 flex flex-wrap items-baseline gap-x-2">
@@ -237,11 +244,22 @@ export class OptionCardComponent {
   readonly depDate = computed(() => fmtShortDate(this.leg().date));
   readonly arrDate = computed(() => fmtShortDate(addDaysISO(this.leg().date, this.plusDays())));
 
-  /** Split summary: the change wait with the hub's name. Empty when there is none. */
-  readonly waitLabel = computed(() => {
-    const w = this.option().connectionMins ?? 0;
-    return w > 0 ? `${fmtDuration(w)} wait at ${this.hub()}` : '';
-  });
+  /** Truthful wait label: names the station only when leg 2 boards where leg 1
+   *  arrives; a cross-station change gets its own line instead. */
+  readonly waitLabel = computed(() =>
+    splitWaitLabel(this.option(), this.hub() ?? '', (c) => this.stations.name(c), fmtDuration),
+  );
+
+  /** 'Change stations in Kanpur: Kanpur Central → Govindpuri' when leg 2 boards
+   *  at a different station than leg 1 arrives at; null otherwise. */
+  readonly changeNote = computed(() =>
+    stationChangeNote(this.option(), this.hubName(), (c) => this.stations.name(c)),
+  );
+
+  /** Where leg 1 arrives: the station the traveller is actually standing at. */
+  readonly arriveName = computed(
+    () => this.stations.name(this.option().legs[0]?.to) || this.option().legs[0]?.to || '',
+  );
 
   /** Class chip text: the selected class, with the fare inside when it is known. */
   readonly classChip = computed(() => {
