@@ -1,4 +1,4 @@
-import { Injectable } from '@angular/core';
+import { Injectable, signal } from '@angular/core';
 
 import { Availability, ConfirmTktProvider, ErailProvider, Station, SearchClass, TrainClass } from '@railvaani/train-core';
 import { findOptions, SplitOption } from '@railvaani/split-engine';
@@ -38,6 +38,9 @@ export class RailService {
     this.erail.setStations(stations);
   }
 
+  /** Options the Any-class budget filter hid in the last search, for the header. */
+  readonly budgetHidden = signal(0);
+
   async find(
     from: string,
     to: string,
@@ -46,7 +49,8 @@ export class RailService {
     budgetPerHead?: number,
     onProgress?: (p: SearchProgress) => void,
   ): Promise<SplitOption[]> {
-    return findOptions(this.provider, {
+    const hiddenByBudget = { count: 0 };
+    const opts = await findOptions(this.provider, {
       from,
       to,
       date,
@@ -57,10 +61,13 @@ export class RailService {
       maxDirects: 20,
       maxSplits: 8,
       excludeDeparted: true,
+      hiddenByBudget,
       onProgress: onProgress
         ? (stage, done, total) => onProgress({ stage, done, total })
         : undefined,
     });
+    this.budgetHidden.set(cls === 'ANY' ? hiddenByBudget.count : 0);
+    return opts;
   }
 
   /** Every class's seat status for a train+date; served from the search's cache. */

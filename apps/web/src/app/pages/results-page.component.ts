@@ -8,6 +8,11 @@ import { RailService } from '../services/rail.service';
 import { StationsService } from '../services/stations.service';
 import { SearchParams, istToday, parseSearchParams } from '../shared/search-params';
 import { classLabel } from '../shared/train-classes';
+import {
+  budgetHiddenNote,
+  slowSearchLine,
+  visibleError,
+} from '../shared/search-status';
 
 /** The results page: reads its search from the URL, runs it, renders ticket stubs. */
 @Component({
@@ -22,7 +27,7 @@ import { classLabel } from '../shared/train-classes';
         <button type="button" (click)="editSearch()" class="rv-chip">Edit search</button>
       </div>
 
-      @if (error() && !searching()) {
+      @if (errorLine() && !searching()) {
         <div class="rv-card rv-error mt-4 flex items-start gap-3 p-4" role="alert">
           <p class="text-sm t-ink">{{ error() }}</p>
           <button type="button" (click)="retry()" class="rv-retry ml-auto shrink-0">Retry</button>
@@ -113,14 +118,23 @@ export class ResultsPageComponent implements OnInit {
   readonly results = signal<SplitOption[] | null>(null);
   readonly error = signal('');
   readonly partialNote = signal(false);
+  /** True once the search has run 20s with no options yet: a note, not an error. */
+  readonly slow = signal(false);
   readonly classDetails = signal<Record<string, ClassDetail>>({});
   private runId = 0;
 
   readonly stepLine = computed(() => {
-    if (this.searching()) return this.stage() === 'checking' ? 'Checking seats…' : 'Finding trains…';
+    if (this.searching()) {
+      const slowLine = slowSearchLine(this.searching(), (this.results()?.length ?? 0) > 0, this.slow());
+      if (slowLine) return slowLine;
+      return this.stage() === 'checking' ? 'Checking seats…' : 'Finding trains…';
+    }
     if (this.checking()) return 'Checking seats…';
     return '';
   });
+
+  /** The error banner hides the moment options are on screen. */
+  readonly errorLine = computed(() => visibleError(this.error(), (this.results()?.length ?? 0) > 0));
 
   readonly budgetNum = computed(() => this.params()?.budget ?? null);
 
@@ -149,6 +163,8 @@ export class ResultsPageComponent implements OnInit {
     parts.push(this.fmtDate(p.date));
     parts.push(classLabel(p.cls));
     if (p.budget !== undefined) parts.push(`Budget ₹${p.budget}`);
+    const hidden = budgetHiddenNote(this.rail.budgetHidden(), p.budget);
+    if (hidden) parts.push(hidden);
     return parts.join(' · ');
   });
 
@@ -234,16 +250,14 @@ export class ResultsPageComponent implements OnInit {
     this.searching.set(true);
     this.stage.set('finding');
     this.checking.set(false);
+    this.slow.set(false);
     let settled = false;
     const timer = setTimeout(() => {
+      // Not an error state: the search keeps running, no retry is offered,
+      // and nothing blames the connection. The step line swaps to the
+      // slow-search note until options arrive.
       if (settled || id !== this.runId) return;
-      settled = true;
-      this.searching.set(false);
-      if ((this.results()?.length ?? 0) > 0) {
-        this.partialNote.set(true);
-      } else {
-        this.error.set('The search took too long. Check your connection and try again.');
-      }
+      if ((this.results()?.length ?? 0) === 0) this.slow.set(true);
     }, 20_000);
     try {
       const opts = await this.rail.find(
@@ -258,7 +272,7 @@ export class ResultsPageComponent implements OnInit {
         return;
       }
       if (settled) {
-        // The timeout already showed the error; options that arrived late still render.
+        // A failure already settled the run; options that arrived late still render.
         if (opts.length > 0) {
           this.results.set(opts);
           this.partialNote.set(true);
@@ -269,6 +283,8 @@ export class ResultsPageComponent implements OnInit {
       settled = true;
       clearTimeout(timer);
       this.results.set(opts);
+      // Options on screen outrank any error: it clears the moment they render.
+      if (opts.length > 0 && this.error()) this.error.set('');
       if (opts.length === 0) {
         this.error.set('No trains found for this route, class and date. Try another class or date.');
       }

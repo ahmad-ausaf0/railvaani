@@ -529,14 +529,15 @@ test('origin loops: no split boards its second leg at the origin or its city clu
   assert.equal(okOpts.filter((o) => o.type === 'split').length, 1, 'a hub outside the origin cluster still splits');
 });
 
-test('any class: split prefers the cheapest class bookable on both legs', async () => {
-  // Sleeper is cheap and open on leg 1 but waitlisted on leg 2, so the cheapest
-  // COMMON bookable class is 3A. A mixed pair (SL + 3A = 890) would total less;
-  // the common class must still win.
+test('any class: a confirmed mixed pair beats a same-class pair with a waitlisted leg', async () => {
+  // Sleeper is confirmed on leg 1 but waitlisted on leg 2, and 3A the other
+  // way round. No class is confirmed on both, while the mixed pair SL + 3A is
+  // confirmed on both legs, so the mixed pair wins even though the cheaper
+  // same-class Sleeper pair (480) has a waitlisted leg.
   const { provider } = makeGeoProvider([
     { number: 'L1', from: 'AAA', to: 'HUB', depTime: '06:00', durationMins: 240,
       fares: { SL: 235, '3A': 625 },
-      availAll: { SL: { state: 'AVAILABLE', count: 50 }, '3A': { state: 'RAC', count: 4 } } },
+      availAll: { SL: { state: 'AVAILABLE', count: 50 }, '3A': { state: 'WL', count: 9, wlPrefix: 'GNWL9' } } },
     { number: 'L2', from: 'HUB', to: 'ZZZ', depTime: '12:00', durationMins: 240,
       fares: { SL: 245, '3A': 655 },
       availAll: { SL: { state: 'WL', count: 12, wlPrefix: 'GNWL12' }, '3A': { state: 'AVAILABLE', count: 50 } } },
@@ -544,10 +545,105 @@ test('any class: split prefers the cheapest class bookable on both legs', async 
   const opts = await findOptions(provider, { from: 'AAA', to: 'ZZZ', date: '2026-12-01', cls: 'ANY', hubs: ['HUB'] });
   const split = opts.find((o) => o.type === 'split');
   assert.ok(split, 'split option exists');
-  assert.equal(split.legs[0]!.cls, '3A');
+  assert.equal(split.legs[0]!.cls, 'SL');
   assert.equal(split.legs[1]!.cls, '3A');
-  assert.equal(split.totalFare, 1280);
+  assert.equal(split.totalFare, 890);
+  assert.equal(split.bookable, true, 'both legs confirmed');
+});
+
+test('any class: with equal availability, the price tie-break picks the cheapest combination', async () => {
+  // Every class is confirmed on both legs, so seat quality is equal across
+  // all combinations and the cheapest total wins: the same-class Sleeper
+  // pair (480) beats the pricier confirmed mixed pair (890).
+  const { provider } = makeGeoProvider([
+    { number: 'L1', from: 'AAA', to: 'HUB', depTime: '06:00', durationMins: 240,
+      fares: { SL: 235, '3A': 625 },
+      availAll: { SL: { state: 'AVAILABLE', count: 50 }, '3A': { state: 'AVAILABLE', count: 50 } } },
+    { number: 'L2', from: 'HUB', to: 'ZZZ', depTime: '12:00', durationMins: 240,
+      fares: { SL: 245, '3A': 655 },
+      availAll: { SL: { state: 'AVAILABLE', count: 50 }, '3A': { state: 'AVAILABLE', count: 50 } } },
+  ]);
+  const opts = await findOptions(provider, { from: 'AAA', to: 'ZZZ', date: '2026-12-01', cls: 'ANY', hubs: ['HUB'] });
+  const split = opts.find((o) => o.type === 'split');
+  assert.ok(split, 'split option exists');
+  assert.equal(split.legs[0]!.cls, 'SL');
+  assert.equal(split.legs[1]!.cls, 'SL');
+  assert.equal(split.totalFare, 480, 'cheapest combination at equal quality');
   assert.equal(split.bookable, true);
+});
+
+test('twin stations: the same two trains at the same fare collapse to one split', async () => {
+  // Trains 101 and 102 run AAA -> H1 -> ZZZ. The same two numbers are also
+  // enumerated through H2, a twin station of the same city, which yields a
+  // second split with the same two trains and the same 900 total. Its faster
+  // connection ranks it first, so without de-duplication the two slots both
+  // go to the same pair of tickets and the genuinely different 201/202 route
+  // via H3 is crowded out. De-duplication runs before the hub-diversity
+  // fill, so the collapse frees that slot.
+  const { provider } = makeGeoProvider([
+    { number: '101', from: 'AAA', to: 'H1', depTime: '06:00', durationMins: 240 },
+    { number: '102', from: 'H1', to: 'ZZZ', depTime: '12:00', durationMins: 240 },
+    { number: '101', from: 'AAA', to: 'H1', depTime: '06:00', durationMins: 240, serves: ['AAA', 'H2'] },
+    { number: '102', from: 'H1', to: 'ZZZ', depTime: '11:40', durationMins: 240, serves: ['H2', 'ZZZ'] },
+    { number: '201', from: 'AAA', to: 'H3', depTime: '06:00', durationMins: 240 },
+    { number: '202', from: 'H3', to: 'ZZZ', depTime: '12:00', durationMins: 240 },
+  ]);
+  const opts = await findOptions(provider, {
+    from: 'AAA', to: 'ZZZ', date: '2026-12-01', cls: 'SL', hubs: ['H1', 'H2', 'H3'], maxSplits: 2,
+  });
+  const splits = opts.filter((o) => o.type === 'split');
+  assert.equal(splits.length, 2, 'the twin duplicate collapsed, both real routes fit');
+  const pair = splits.find((o) => o.legs[0]!.trainNumber === '101');
+  assert.ok(pair, 'the 101/102 pair survives');
+  assert.equal(pair.hub, 'H2', 'one instance kept: the higher-ranked twin, faster connection');
+  assert.equal(pair.legs[0]!.to, pair.legs[1]!.from, 'the kept instance waits at a single station');
+  assert.equal(pair.totalFare, 900, 'the duplicate key required the same total fare');
+  assert.ok(
+    splits.some((o) => o.legs[0]!.trainNumber === '201'),
+    'the freed slot went to the genuinely different route',
+  );
+});
+
+test('any class: budget is a hard filter and reports how many options it hid', async () => {
+  const make = () => makeGeoProvider([
+    { number: 'D1', from: 'AAA', to: 'ZZZ', depTime: '06:00', durationMins: 300,
+      fares: { SL: 235 }, availAll: { SL: { state: 'AVAILABLE', count: 50 } } },
+    { number: 'D2', from: 'AAA', to: 'ZZZ', depTime: '09:00', durationMins: 300,
+      fares: { SL: 900 }, availAll: { SL: { state: 'AVAILABLE', count: 50 } } },
+  ]);
+  const hidden = { count: 0 };
+  const opts = await findOptions(make().provider, {
+    from: 'AAA', to: 'ZZZ', date: '2026-12-01', cls: 'ANY', budgetPerHead: 600, hiddenByBudget: hidden,
+  });
+  assert.deepEqual(
+    opts.map((o) => o.legs[0]!.trainNumber),
+    ['D1'],
+    'the over-budget option is not shown',
+  );
+  assert.equal(hidden.count, 1, 'the header can state what the budget hid');
+  const all = await findOptions(make().provider, {
+    from: 'AAA', to: 'ZZZ', date: '2026-12-01', cls: 'ANY',
+  });
+  assert.equal(all.length, 2, 'without a budget both options show');
+});
+
+test('single-class mode keeps the over-budget badge: options rank last but still show', async () => {
+  const make = () => makeGeoProvider([
+    { number: 'D1', from: 'AAA', to: 'ZZZ', depTime: '06:00', durationMins: 300,
+      fares: { SL: 235 }, availAll: { SL: { state: 'AVAILABLE', count: 50 } } },
+    { number: 'D2', from: 'AAA', to: 'ZZZ', depTime: '09:00', durationMins: 300,
+      fares: { SL: 900 }, availAll: { SL: { state: 'AVAILABLE', count: 50 } } },
+  ]);
+  const hidden = { count: 0 };
+  const opts = await findOptions(make().provider, {
+    from: 'AAA', to: 'ZZZ', date: '2026-12-01', cls: 'SL', budgetPerHead: 600, hiddenByBudget: hidden,
+  });
+  assert.deepEqual(
+    opts.map((o) => o.legs[0]!.trainNumber),
+    ['D1', 'D2'],
+    'within-budget first, the over-budget option still visible',
+  );
+  assert.equal(hidden.count, 0, 'the hidden count is only reported in any mode');
 });
 
 test('any class: no common bookable class falls back to a labelled mixed split', async () => {
@@ -573,7 +669,7 @@ test('any class: no common bookable class falls back to a labelled mixed split',
   assert.equal(split.bookable, true);
 });
 
-test('any class: budget applies to the picked split total', async () => {
+test('any class: budget applies to the picked split total and hides over-budget options', async () => {
   const make = () => makeGeoProvider([
     { number: 'M1', from: 'AAA', to: 'HUB', depTime: '06:00', durationMins: 240,
       fares: { SL: 235, '3A': 625 },
@@ -582,14 +678,20 @@ test('any class: budget applies to the picked split total', async () => {
       fares: { SL: 245, '3A': 655 },
       availAll: { SL: { state: 'WL', count: 12, wlPrefix: 'GNWL12' }, '3A': { state: 'AVAILABLE', count: 50 } } },
   ]);
+  const withinHidden = { count: 0 };
   const within = await findOptions(make().provider, {
-    from: 'AAA', to: 'ZZZ', date: '2026-12-01', cls: 'ANY', hubs: ['HUB'], budgetPerHead: 900,
+    from: 'AAA', to: 'ZZZ', date: '2026-12-01', cls: 'ANY', hubs: ['HUB'],
+    budgetPerHead: 900, hiddenByBudget: withinHidden,
   });
   assert.equal(within.find((o) => o.type === 'split')!.withinBudget, true, '890 total fits a 900 budget');
+  assert.equal(withinHidden.count, 0, 'nothing hidden within budget');
+  const overHidden = { count: 0 };
   const over = await findOptions(make().provider, {
-    from: 'AAA', to: 'ZZZ', date: '2026-12-01', cls: 'ANY', hubs: ['HUB'], budgetPerHead: 800,
+    from: 'AAA', to: 'ZZZ', date: '2026-12-01', cls: 'ANY', hubs: ['HUB'],
+    budgetPerHead: 800, hiddenByBudget: overHidden,
   });
-  assert.equal(over.find((o) => o.type === 'split')!.withinBudget, false, '890 total busts an 800 budget');
+  assert.equal(over.length, 0, 'an 890 total busts an 800 budget and is hidden, not ranked last');
+  assert.equal(overHidden.count, 1, 'the header can state what the budget hid');
 });
 
 test('any class: direct headline is the cheapest bookable class, honestly labelled otherwise', async () => {

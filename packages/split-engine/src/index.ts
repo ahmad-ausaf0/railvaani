@@ -71,6 +71,9 @@ export interface SplitQuery {
   /** Legacy single cap over the combined list. When set, maxDirects and maxSplits
    *  are ignored so old callers keep today's behaviour. */
   maxResults?: number;
+  /** Any mode only: the engine records here how many options the budget
+   *  hard filter dropped, for the results header. */
+  hiddenByBudget?: { count: number };
   /**
    * Hide trains whose departure on the journey date has already passed
    * (railway time is IST). Default false: mock-provider tests use fixed
@@ -241,6 +244,30 @@ function isOriginLoop(
 /** Fill split slots in ranked order, but no single change station takes more
  *  than maxPerHub of them: once a station reaches the cap, its remaining
  *  splits are skipped and the fill continues with other stations. */
+/**
+ * Twin-station de-duplication: two splits that use the same leg-1 train,
+ * the same leg-2 train and the same total fare are the same pair of
+ * tickets reached through twin stations of one city. Keep one: the
+ * same-station change when one exists, else the higher-ranked (the list is
+ * sorted, so the first seen stays unless a same-station twin appears later).
+ */
+function dedupeByTrains(options: SplitOption[]): SplitOption[] {
+  const keyOf = (o: SplitOption) =>
+    `${o.legs[0]!.trainNumber}|${o.legs[1]!.trainNumber}|${o.totalFare}`;
+  const keyed = new Map<string, SplitOption>();
+  for (const o of options) {
+    if (o.type !== 'split') continue;
+    const kept = keyed.get(keyOf(o));
+    if (!kept) {
+      keyed.set(keyOf(o), o);
+      continue;
+    }
+    const keptSame = kept.legs[0]!.to === kept.legs[1]!.from;
+    if (!keptSame && o.legs[0]!.to === o.legs[1]!.from) keyed.set(keyOf(o), o);
+  }
+  return options.filter((o) => o.type !== 'split' || keyed.get(keyOf(o)) === o);
+}
+
 function fillWithHubDiversity(
   ranked: SplitOption[],
   maxSplits: number,
@@ -354,6 +381,22 @@ function pickAnyLeg(leg: SplitLeg): SplitLeg {
  * single-leg picks would total less. With none bookable on both, each leg
  * takes its own cheapest bookable class: a mixed split, labelled per leg.
  */
+/** Seat quality for the Any-mode split pick: Available beats RAC, RAC beats
+ *  waitlist. Waitlisted and unbookable legs rank equally (0). */
+const SEAT_QUALITY: Record<string, number> = { AVAILABLE: 2, RAC: 1 };
+
+function seatQuality(a: Availability): number {
+  return SEAT_QUALITY[a.state] ?? 0;
+}
+
+/**
+ * Any mode, a split: rank every class combination (the same class on both
+ * legs, or a mixed pair) by seat quality across both legs: both legs
+ * Available beats any RAC, RAC beats waitlist, and ties break on the
+ * cheapest total fare. A confirmed mixed pair therefore outranks a
+ * waitlisted same-class pair, while an equally-confirmed same-class pair
+ * still beats a pricier mixed one on the price tie-break.
+ */
 function pickSplitClasses(
   l1: SplitLeg,
   l2: SplitLeg,
@@ -361,20 +404,20 @@ function pickSplitClasses(
   const p1 = l1.perClass;
   const p2 = l2.perClass;
   if (!p1?.length || !p2?.length) return null;
-  let best: { c1: TrainClass; c2: TrainClass; fare: number } | null = null;
+  let best: { c1: TrainClass; c2: TrainClass; fare: number; quality: number } | null = null;
   for (const e1 of p1) {
-    if (!isBookable(e1.availability)) continue;
-    const e2 = p2.find((x) => x.cls === e1.cls);
-    if (!e2 || !isBookable(e2.availability)) continue;
-    const fare = e1.fare + e2.fare;
-    if (!best || fare < best.fare) best = { c1: e1.cls, c2: e2.cls, fare };
+    for (const e2 of p2) {
+      const quality = Math.min(seatQuality(e1.availability), seatQuality(e2.availability));
+      const fare = e1.fare + e2.fare;
+      if (!best || quality > best.quality || (quality === best.quality && fare < best.fare)) {
+        best = { c1: e1.cls, c2: e2.cls, fare, quality };
+      }
+    }
   }
-  if (best) return { c1: best.c1, c2: best.c2, mixed: false };
-  const h1 = pickHeadline(p1);
-  const h2 = pickHeadline(p2);
-  if (!h1 || !h2) return null;
-  return { c1: h1.cls, c2: h2.cls, mixed: true };
+  if (!best) return null;
+  return { c1: best.c1, c2: best.c2, mixed: best.c1 !== best.c2 };
 }
+
 
 /** Any mode, a split: each cached leg cloned around its picked class. */
 function pickSplitLegs(l1: SplitLeg, l2: SplitLeg): [SplitLeg, SplitLeg] {
@@ -797,7 +840,16 @@ export async function findOptions(
     deduped.sort(compareOptions);
   }
 
-  const filtered = query.onlyWithinBudget ? deduped.filter((o) => o.withinBudget) : deduped;
+  // Twin-station duplicates go before the hub-diversity fill, so slots they
+  // free go to genuinely different options.
+  const pairDeduped = dedupeByTrains(deduped);
+  // Any mode makes the budget a hard filter: options above it are not shown,
+  // and how many were hidden is reported for the results header.
+  const hardBudget = anyMode || query.onlyWithinBudget === true;
+  const filtered = hardBudget ? pairDeduped.filter((o) => o.withinBudget) : pairDeduped;
+  if (anyMode && query.hiddenByBudget) {
+    query.hiddenByBudget.count = pairDeduped.length - filtered.length;
+  }
   if (legacyMax !== undefined) {
     return filtered.slice(0, legacyMax);
   }
