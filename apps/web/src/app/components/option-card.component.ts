@@ -22,7 +22,7 @@ export interface ClassDetail {
   dateWiseLabel?: string;
 }
 
-/** One train on a paper ticket stub, or a split journey as two stubs under one banner. */
+/** One train on a card, or a split journey as two legs under one banner. */
 @Component({
   selector: 'rv-option-card',
   template: `
@@ -30,11 +30,10 @@ export interface ClassDetail {
       <article class="rv-card rv-ticket">
         <div class="flex items-start justify-between gap-3">
           <div class="min-w-0">
-            <p class="rv-train-no">{{ leg().trainNumber }}</p>
-            <h3 class="rv-train-name">{{ leg().trainName }}</h3>
+            <h3 class="rv-train-head">{{ leg().trainName }} &middot; {{ leg().trainNumber }}</h3>
           </div>
           <div class="shrink-0 text-right">
-            <p class="rv-fare">&#8377;{{ option().totalFare }}</p>
+            <p class="rv-fare"><span class="rv-fare-from">from</span>&#8377;{{ option().totalFare }}</p>
             <p class="rv-fare-per">per person</p>
           </div>
         </div>
@@ -63,7 +62,7 @@ export interface ClassDetail {
         <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
           @if (classChips().length > 0) {
             @for (chip of classChips(); track chip.cls) {
-              <span class="rv-class-chip">
+              <span class="rv-class-chip {{ chip.tone }}">
                 {{ chip.cls }} &#8377;{{ chip.fare }} &middot;
                 <span class="{{ chip.tone }}" role="status" [attr.title]="asOfTitle(chip.availability)">{{ chip.status }}</span>
               </span>
@@ -114,6 +113,7 @@ export interface ClassDetail {
       </article>
     } @else {
       <article class="rv-card rv-ticket-split overflow-hidden">
+        <span class="rv-grad-bar" aria-hidden="true"></span>
         <p class="rv-banner" [class.rv-banner-over]="budgetNote().over">
           <span>SPLIT &middot; 2 TICKETS, 1 JOURNEY{{ budgetNote().text }}</span>
           <span>Total &#8377;{{ option().totalFare }}</span>

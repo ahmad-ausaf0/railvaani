@@ -28,14 +28,14 @@ type SpeechEvent = { results: ArrayLike<ArrayLike<{ transcript: string }>> };
   imports: [StationInputComponent],
   template: `
     <main id="main" class="mx-auto max-w-[1060px] px-4 pb-16">
-      <h1 class="sr-only">Find trains across India</h1>
+      <h1 class="rv-hero">Where to,<br /><span class="rv-hero-grad">today?</span></h1>
 
-      <section class="rv-card mt-6 p-4 sm:p-6" aria-label="Search form">
+      <div class="flex justify-center">
         <button
           type="button"
           (click)="startVoice()"
           [attr.aria-pressed]="listening()"
-          class="rv-voice mb-4 flex items-center"
+          class="rv-voice"
         >
           <span class="rv-voice-disc" aria-hidden="true">
             <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -49,8 +49,10 @@ type SpeechEvent = { results: ArrayLike<ArrayLike<{ transcript: string }>> };
             <span>Tap and say: "Gorakhpur to New Delhi"</span>
           }
         </button>
-        @if (voiceNote()) { <p class="rv-note" role="status">{{ voiceNote() }}</p> }
+      </div>
+      @if (voiceNote()) { <p class="rv-note" role="status">{{ voiceNote() }}</p> }
 
+      <section class="rv-card p-4 sm:p-6" aria-label="Search form">
         <div class="grid gap-3">
           <div class="grid gap-3 sm:grid-cols-[1fr_auto_1fr] sm:items-end">
             <rv-station-input
@@ -76,19 +78,23 @@ type SpeechEvent = { results: ArrayLike<ArrayLike<{ transcript: string }>> };
             />
           </div>
 
-          <div>
-            <label for="date" class="rv-label">Journey date</label>
-            <input id="date" type="date" class="rv-input" [value]="date()" [min]="minDate" (change)="date.set(d.value)" #d />
-          </div>
+          <div class="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label for="date" class="rv-label">Journey date</label>
+              <input id="date" type="date" class="rv-input" [value]="date()" [min]="minDate" (change)="date.set(d.value)" #d />
+            </div>
 
-          <div>
-            <label for="budget" class="rv-label">Budget per person (&#8377;, optional)</label>
-            <input id="budget" type="number" min="0" inputmode="numeric" placeholder="e.g. 600" class="rv-input"
-              [value]="budget()" (input)="budget.set(b.value)" #b />
+            <div>
+              <label for="budget" class="rv-label">Budget per person (&#8377;, optional)</label>
+              <input id="budget" type="number" min="0" inputmode="numeric" placeholder="e.g. 600" class="rv-input"
+                [value]="budget()" (input)="budget.set(b.value)" #b />
+            </div>
           </div>
         </div>
 
         <button type="button" (click)="submit()" class="rv-primary mt-4">Search trains</button>
+
+        <p class="rv-note mt-3">No class to pick &mdash; results show all classes.</p>
 
         <div class="mt-3 flex flex-wrap gap-2">
           @for (ex of examples; track ex[0]) {

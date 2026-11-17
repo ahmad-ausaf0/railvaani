@@ -30,27 +30,32 @@ test('From and To share a row on desktop', async ({ page }) => {
     return { from: y('input#from'), to: y('input#to'), date: y('#date'), budget: y('#budget') };
   });
   expect(Math.abs(rows.from - rows.to)).toBeLessThanOrEqual(4);
-  expect(rows.budget).toBeGreaterThan(rows.date);
+  // Date and Budget sit side by side beneath the From/To row.
+  expect(Math.abs(rows.budget - rows.date)).toBeLessThanOrEqual(4);
 });
 
-test('paper theme is applied: tokens, fonts, and no gradients', async ({ page }) => {
+test('clean theme is applied: tokens, system font, approved gradients only', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto('/');
 
-  // Page background is the paper tone from --paper (#FAF4E8).
+  // Page background is the clean off-white from --bg (#FAFAF8).
   const bg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
-  expect(bg).toBe('rgb(250, 244, 232)');
+  expect(bg).toBe('rgb(250, 250, 248)');
 
-  // Signage blue theme colour and the Mukta body font are loaded.
-  expect(await page.getAttribute('meta[name="theme-color"]', 'content')).toBe('#17457A');
+  // Theme colour matches the page background; no webfont is loaded, the
+  // interface renders in the system sans stack.
+  expect(await page.getAttribute('meta[name="theme-color"]', 'content')).toBe('#FAFAF8');
   const font = await page.evaluate(() => getComputedStyle(document.querySelector('main') as Element).fontFamily);
-  expect(font).toContain('Mukta');
+  expect(font).not.toContain('Mukta');
+  expect(font).not.toContain('Rozha');
 
-  // The redesign removes every linear/radial gradient from app styles.
-  const gradients = await page.evaluate(() =>
+  // One gradient, used only on the logo tile, the voice disc, the hero's
+  // gradient line, and the split-card banner bar.
+  const offenders = await page.evaluate(() =>
     Array.from(document.querySelectorAll('body, body *'))
-      .map((el) => getComputedStyle(el).backgroundImage)
-      .filter((img) => /gradient/.test(img)),
+      .filter((el) => /gradient/.test(getComputedStyle(el).backgroundImage))
+      .map((el) => String(el.className))
+      .filter((cls) => !/rv-logo|rv-voice-disc|rv-hero-grad|rv-grad-bar/.test(cls)),
   );
-  expect(gradients).toEqual([]);
+  expect(offenders).toEqual([]);
 });

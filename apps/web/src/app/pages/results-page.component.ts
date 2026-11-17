@@ -25,7 +25,7 @@ import {
       <h1 class="sr-only">Train results</h1>
 
       <div class="rv-card mt-6 flex flex-wrap items-center gap-x-3 gap-y-2 p-3 sm:p-4">
-        <p class="mr-auto text-sm font-semibold t-ink" role="status">{{ summary() }}</p>
+        <p class="mr-auto text-sm t-soft" role="status">{{ summary() }}</p>
         <button type="button" (click)="editSearch()" class="rv-chip">Edit search</button>
       </div>
 
@@ -44,6 +44,9 @@ import {
             <h2 class="rv-results-title mr-auto">
               <span role="status">{{ rs.length }} options &middot; {{ routeName() }}</span>
             </h2>
+            @if (checkedAll() && rs.length > 0) {
+              <span class="rv-checked"><span class="rv-checked-dot" aria-hidden="true"></span>Seat status checked</span>
+            }
             <div class="flex gap-1.5" role="group" aria-label="Sort options">
               @for (s of sorts; track s.key) {
                 <button type="button" (click)="sort.set(s.key)" [class.rv-sort-active]="sort() === s.key" class="rv-sort">
@@ -117,6 +120,8 @@ export class ResultsPageComponent implements OnInit {
   readonly searching = signal(false);
   readonly stage = signal<'finding' | 'checking'>('finding');
   readonly checking = signal(false);
+  /** True only when the seat-check pass finished with a status for every train. */
+  readonly checkedAll = signal(false);
   readonly results = signal<SplitOption[] | null>(null);
   readonly error = signal('');
   readonly partialNote = signal(false);
@@ -162,8 +167,9 @@ export class ResultsPageComponent implements OnInit {
   readonly summary = computed(() => {
     const p = this.params();
     if (!p) return '';
-    const parts: string[] = [`${this.stations.name(p.from) || p.from} → ${this.stations.name(p.to) || p.to}`];
-    parts.push(this.fmtDate(p.date));
+    // Meta line: date · All classes · budget · hidden count. The route lives in
+    // the results heading, so it is not repeated here.
+    const parts: string[] = [this.fmtDate(p.date)];
     parts.push('All classes');
     if (p.budget !== undefined) parts.push(`Budget ₹${p.budget}`);
     const hidden = budgetHiddenNote(this.rail.budgetHidden(), p.budget);
@@ -246,6 +252,7 @@ export class ResultsPageComponent implements OnInit {
     this.searching.set(true);
     this.stage.set('finding');
     this.checking.set(false);
+    this.checkedAll.set(false);
     this.slow.set(false);
     let settled = false;
     const timer = setTimeout(() => {
@@ -312,6 +319,7 @@ export class ResultsPageComponent implements OnInit {
     const seen = new Set<string>();
     const dates = this.recentDates(p.date);
     let warmed = false;
+    let incomplete = false;
     this.checking.set(true);
     // Terminal cap: still-pending seat checks are abandoned in the UI 30s
     // after the options first rendered. Cards keep their last-known status;
@@ -333,6 +341,7 @@ export class ResultsPageComponent implements OnInit {
         }
         const avail = await this.rail.availabilityFor(leg.trainNumber, leg.date).catch(() => ({}));
         if (id !== this.runId) return;
+        if (Object.keys(avail).length === 0) incomplete = true;
         details[leg.trainNumber] = {
           fares: this.rail.fareTableFor(leg.trainNumber, leg.from, leg.to),
           avail,
@@ -345,7 +354,12 @@ export class ResultsPageComponent implements OnInit {
       }
     } finally {
       clearTimeout(cap);
-      if (id === this.runId) this.checking.set(false);
+      if (id === this.runId) {
+        this.checking.set(false);
+        // The pill appears only when the pass genuinely completed with a status
+        // for every checked train; abandoned or partial passes do not earn it.
+        this.checkedAll.set(!incomplete && opts.length > 0);
+      }
     }
   }
 

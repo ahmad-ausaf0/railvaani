@@ -1,7 +1,7 @@
 import { Component } from '@angular/core';
 import { RouterOutlet } from '@angular/router';
 
-/** App shell: signage header, the routed page, paper footer. */
+/** App shell: header with the gradient logo tile, the routed page, footer. */
 @Component({
   selector: 'rv-root',
   imports: [RouterOutlet],
@@ -22,6 +22,7 @@ import { RouterOutlet } from '@angular/router';
           <p class="rv-wordmark">RailVaani</p>
           <p class="rv-tagline">रेलवाणी · बोलकर ट्रेन खोजें</p>
         </div>
+        <span class="rv-lang" title="Interface language: English">EN</span>
       </div>
     </header>
 
