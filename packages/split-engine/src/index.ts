@@ -852,26 +852,37 @@ export async function findOptions(
   // free go to genuinely different options.
   const pairDeduped = dedupeByTrains(deduped);
   // Any mode makes the budget a hard filter: options above it are not shown.
-  // The hidden count is traveller-level only and is taken here, after
-  // de-duplication and before the hub slot caps: a direct counts when its
-  // headline price exceeds the budget, a split when its total does. Per-class
-  // combinations, per-leg evaluations and hub attempts never reach this list,
-  // so none of them can enter the count.
+  // The hidden count is traveller-level only and compares two displayable
+  // sets, each post de-duplication and post caps: what would show without the
+  // budget versus what shows with it. Only options the budget alone removes
+  // count, so the header never promises more than raising the budget could
+  // actually reveal. Per-class combinations, per-leg evaluations and hub
+  // attempts never reach this list, so none of them can enter the count.
   const hardBudget = anyMode || query.onlyWithinBudget === true;
+  const displayable = (list: SplitOption[]): SplitOption[] => {
+    if (legacyMax !== undefined) return list.slice(0, legacyMax);
+    const directs = list.filter((o) => o.type === 'direct').slice(0, maxDirects);
+    const splitCandidates = list.filter((o) => o.type === 'split');
+    // Hub diversity: with more candidates than slots, no single change station
+    // takes more than four of them, so busy hubs cannot crowd out other routes.
+    const splits =
+      splitCandidates.length <= maxSplits
+        ? splitCandidates
+        : fillWithHubDiversity(splitCandidates, maxSplits, MAX_SPLITS_PER_HUB);
+    return [...directs, ...splits];
+  };
+  // Identity matches the de-duplication key: what the traveller sees as one
+  // option (the same trains at the same total) is the unit that can or cannot
+  // return when the budget is raised.
+  const keyOf = (o: SplitOption) =>
+    o.type === 'direct'
+      ? `direct|${o.legs[0]!.trainNumber}|${o.totalFare}`
+      : `split|${o.legs[0]!.trainNumber}|${o.legs[1]!.trainNumber}|${o.totalFare}`;
   const filtered = hardBudget ? pairDeduped.filter((o) => o.withinBudget) : pairDeduped;
+  const shown = displayable(filtered);
   if (anyMode && query.hiddenByBudget) {
-    query.hiddenByBudget.count = pairDeduped.filter((o) => !o.withinBudget).length;
+    const kept = new Set(shown.map(keyOf));
+    query.hiddenByBudget.count = displayable(pairDeduped).filter((o) => !kept.has(keyOf(o))).length;
   }
-  if (legacyMax !== undefined) {
-    return filtered.slice(0, legacyMax);
-  }
-  const directs = filtered.filter((o) => o.type === 'direct').slice(0, maxDirects);
-  const splitCandidates = filtered.filter((o) => o.type === 'split');
-  // Hub diversity: with more candidates than slots, no single change station
-  // takes more than four of them, so busy hubs cannot crowd out other routes.
-  const splits =
-    splitCandidates.length <= maxSplits
-      ? splitCandidates
-      : fillWithHubDiversity(splitCandidates, maxSplits, MAX_SPLITS_PER_HUB);
-  return [...directs, ...splits];
+  return shown;
 }

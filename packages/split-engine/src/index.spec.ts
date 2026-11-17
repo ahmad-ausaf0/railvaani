@@ -723,10 +723,13 @@ test('hidden count: zero with no budget and zero when nothing exceeds it', async
   assert.equal(fits.count, 0, 'every option fits a 900 budget');
 });
 
-test('hidden count: options beyond the deferred refine slice keep their true budget status', async () => {
-  // 30 directs within budget and 2 over: the refine covers the top 28, so the
-  // two within-budget directs just outside it must not be miscounted as
-  // budget-hidden.
+test('hidden count: over-budget options beyond the caps count nothing even unrefined', async () => {
+  // 30 directs within budget and 2 over: with the direct cap at 20 the two
+  // over-budget trains rank outside the displayable set, so raising the
+  // budget would reveal nothing and the count is zero, even in deferred mode
+  // where their availability was never refined (withinBudget comes from
+  // fares, not the refinement). Lift the cap and the same two trains would
+  // have been displayed, so the same fixture then counts them.
   const trains: any[] = [];
   for (let i = 1; i <= 30; i++) {
     trains.push({
@@ -745,7 +748,13 @@ test('hidden count: options beyond the deferred refine slice keep their true bud
     from: 'AAA', to: 'ZZZ', date: '2026-12-01', cls: 'ANY', budgetPerHead: 600,
     hiddenByBudget: hidden, availabilityMode: 'deferred', maxDirects: 20, maxSplits: 8,
   });
-  assert.equal(hidden.count, 2, 'only the two genuinely over-budget directs count');
+  assert.equal(hidden.count, 0, 'options the caps cut anyway never count as hidden');
+  const lifted = { count: -1 };
+  await findOptions(provider, {
+    from: 'AAA', to: 'ZZZ', date: '2026-12-01', cls: 'ANY', budgetPerHead: 600,
+    hiddenByBudget: lifted, availabilityMode: 'deferred', maxDirects: 32, maxSplits: 8,
+  });
+  assert.equal(lifted.count, 2, 'the same two directs count once the cap stops binding');
 });
 
 test('single-class mode keeps the over-budget badge: options rank last but still show', async () => {
@@ -765,6 +774,47 @@ test('single-class mode keeps the over-budget badge: options rank last but still
     'within-budget first, the over-budget option still visible',
   );
   assert.equal(hidden.count, 0, 'the hidden count is only reported in any mode');
+});
+
+test('hidden count: options the caps would cut anyway never count as hidden', async () => {
+  // Three over-budget split candidates, but the split cap holds two slots.
+  // Without the budget the screen would show the two ranked-best candidates,
+  // so only the one the budget alone removes counts. The third candidate
+  // loses its slot to the cap either way and stays out of the number.
+  for (const availabilityMode of ['eager', 'deferred'] as const) {
+    const { provider } = makeGeoProvider(
+      [
+        { number: 'D1', from: 'AAA', to: 'ZZZ', depTime: '05:00', durationMins: 300,
+          fares: { SL: 500 }, availAll: { SL: AV50 } },
+        { number: 'D2', from: 'AAA', to: 'ZZZ', depTime: '05:30', durationMins: 300,
+          fares: { SL: 550 }, availAll: { SL: AV50 } },
+        { number: 'M1', from: 'AAA', to: 'H1', depTime: '09:00', durationMins: 240,
+          fares: { SL: 200 }, availAll: { SL: AV50 } },
+        { number: 'M2', from: 'H1', to: 'ZZZ', depTime: '14:45', durationMins: 240,
+          fares: { SL: 300 }, availAll: { SL: AV50 } },
+        { number: 'L1', from: 'AAA', to: 'H2', depTime: '07:00', durationMins: 240,
+          fares: { SL: 400 }, availAll: { SL: AV50 } },
+        { number: 'L2', from: 'H2', to: 'ZZZ', depTime: '12:30', durationMins: 240,
+          fares: { SL: 400 }, availAll: { SL: AV50 } },
+        { number: 'K1', from: 'AAA', to: 'H3', depTime: '07:30', durationMins: 240,
+          fares: { SL: 425 }, availAll: { SL: AV50 } },
+        { number: 'K2', from: 'H3', to: 'ZZZ', depTime: '14:00', durationMins: 240,
+          fares: { SL: 425 }, availAll: { SL: AV50 } },
+      ],
+      { hubs: ['H1', 'H2', 'H3'] },
+    );
+    const hidden = { count: -1 };
+    const opts = await findOptions(provider, {
+      from: 'AAA', to: 'ZZZ', date: '2026-12-01', cls: 'ANY', budgetPerHead: 600,
+      hiddenByBudget: hidden, availabilityMode, maxDirects: 20, maxSplits: 2,
+    });
+    assert.equal(
+      hidden.count, 1,
+      `${availabilityMode}: only the L pair is hidden; the K pair loses its slot to the cap, not the budget`,
+    );
+    const shownSplits = opts.filter((o) => o.type === 'split').map((o) => o.legs[0]!.trainNumber);
+    assert.deepEqual(shownSplits, ['M1'], `${availabilityMode}: the within-budget split shows`);
+  }
 });
 
 test('any class: no common bookable class falls back to a labelled mixed split', async () => {
