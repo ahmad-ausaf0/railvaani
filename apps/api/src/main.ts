@@ -1,3 +1,4 @@
+import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
 
 import { loadConfig } from './config.js';
@@ -20,6 +21,8 @@ if (!cfg.confirmtktApiKey) {
 }
 
 const app = buildApp(cfg);
-app.listen(cfg.port, () => {
-  console.log(`railvaani-api listening on port ${cfg.port}`);
+const server = app.listen(cfg.port, () => {
+  // PORT=0 binds an ephemeral port; report the address actually bound.
+  const bound = (server.address() as AddressInfo | null)?.port ?? cfg.port;
+  console.log(`railvaani-api listening on port ${bound}`);
 });
