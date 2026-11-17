@@ -50,12 +50,14 @@ test('clean theme is applied: tokens, system font, approved gradients only', asy
   expect(font).not.toContain('Rozha');
 
   // One gradient, used only on the logo tile, the voice disc, the hero's
-  // gradient line, and the split-card banner bar.
+  // gradient line, the split-card banner bar, and the split section's
+  // gradient label and underline bar (approved mockup v3, W2).
   const offenders = await page.evaluate(() =>
     Array.from(document.querySelectorAll('body, body *'))
       .filter((el) => /gradient/.test(getComputedStyle(el).backgroundImage))
       .map((el) => String(el.className))
-      .filter((cls) => !/rv-logo|rv-voice-disc|rv-hero-grad|rv-grad-bar/.test(cls)),
+      .filter((cls) =>
+        !/rv-logo|rv-voice-disc|rv-hero-grad|rv-grad-bar|rv-grad-label|rv-grad-underline/.test(cls)),
   );
   expect(offenders).toEqual([]);
 });

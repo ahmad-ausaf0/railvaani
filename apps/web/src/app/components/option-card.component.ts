@@ -38,7 +38,9 @@ export interface ClassDetail {
           </div>
         </div>
 
-        <div class="mt-4 flex items-end gap-2 sm:gap-3">
+        <div class="rv-rule" aria-hidden="true"></div>
+
+        <div class="flex items-end gap-2 sm:gap-3">
           <div class="shrink-0">
             <p class="rv-time">{{ leg().depTime }}</p>
             @if (depDate()) { <p class="rv-date">{{ depDate() }}</p> }
@@ -113,11 +115,11 @@ export interface ClassDetail {
       </article>
     } @else {
       <article class="rv-card rv-ticket-split overflow-hidden">
-        <span class="rv-grad-bar" aria-hidden="true"></span>
         <p class="rv-banner" [class.rv-banner-over]="budgetNote().over">
           <span>SPLIT &middot; 2 TICKETS, 1 JOURNEY{{ budgetNote().text }}</span>
           <span>Total &#8377;{{ option().totalFare }}</span>
         </p>
+        <span class="rv-grad-bar" aria-hidden="true"></span>
         <p class="rv-banner rv-banner-sub">
           <span>Total {{ fmtDuration(option().totalDurationMins) }}</span>
           @if (waitLabel()) { <span>{{ waitLabel() }}</span> }

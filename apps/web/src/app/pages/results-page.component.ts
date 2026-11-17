@@ -25,7 +25,10 @@ import {
       <h1 class="sr-only">Train results</h1>
 
       <div class="rv-card mt-6 flex flex-wrap items-center gap-x-3 gap-y-2 p-3 sm:p-4">
-        <p class="mr-auto text-sm t-soft" role="status">{{ summary() }}</p>
+        <div class="mr-auto min-w-0">
+          <p class="rv-summary-route">{{ routeArrow() }}</p>
+          <p class="rv-summary-meta text-sm t-soft" role="status">{{ summary() }}</p>
+        </div>
         <button type="button" (click)="editSearch()" class="rv-chip">Edit search</button>
       </div>
 
@@ -55,18 +58,23 @@ import {
               }
             </div>
           </div>
+          @if (isToday()) {
+            <p class="rv-departed">
+              <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3.5 2" /></svg>
+              <span><strong>Already departed:</strong> Trains that already departed today are not shown.</span>
+            </p>
+          }
           @if (partialNote()) { <p class="rv-note mt-2" role="status">Some options could not be checked.</p> }
           <p class="rv-fineprint mt-2">
             Schedules and fares live from Indian Railways data. Availability comes from ConfirmTkt's cache and can lag
-            IRCTC by a few hours; each figure carries its snapshot time. Booking happens on IRCTC. @if (isToday()) {
-            Trains that already departed today are not shown. }
+            IRCTC by a few hours; each figure carries its snapshot time. Booking happens on IRCTC.
           </p>
 
           <h3 class="rv-section mt-5">Direct trains</h3>
           @if (direct().length > 0) {
-            <div class="mt-3 grid items-start gap-4 lg:grid-cols-2">
-              @for (o of direct(); track trackKey(o)) {
-                <rv-option-card [option]="o" [classDetail]="classDetailFor(o)"
+            <div class="mt-3 grid items-start gap-[14px] lg:grid-cols-2">
+              @for (o of direct(); track trackKey(o); let i = $index) {
+                <rv-option-card [style.--float-delay]="((i % 8) * 0.35) + 's'" [option]="o" [classDetail]="classDetailFor(o)"
                   [dateWise]="classDetailFor(o)?.dateWise" [dateWiseDates]="classDetailFor(o)?.dateWiseDates"
                   [dateWiseLabel]="dateWiseLabelFor(o)" [clsLabel]="clsName()" [budget]="budgetNum()" />
               }
@@ -75,11 +83,14 @@ import {
             <p class="rv-note mt-3">No direct trains on this route. A split journey may still work.</p>
           }
 
-          <h3 class="rv-section mt-6">Split options (two tickets, one journey)</h3>
+          <p class="rv-grad-label mt-6">★ RailVaani speciality</p>
+          <h3 class="rv-section m-0">Split options (two tickets, one journey)</h3>
+          <span class="rv-grad-underline" aria-hidden="true"></span>
           @if (splits().length > 0) {
-            <div class="mt-3 grid items-start gap-4 lg:grid-cols-2">
-              @for (o of splits(); track trackKey(o)) {
-                <rv-option-card [option]="o" [hubName]="stations.name(o.hub)" [clsLabel]="clsName()" [budget]="budgetNum()" />
+            <div class="mt-3 grid items-start gap-[14px] lg:grid-cols-2">
+              @for (o of splits(); track trackKey(o); let i = $index) {
+                <!-- Splits start half a float cycle later: the two sections never move in sync. -->
+                <rv-option-card [style.--float-delay]="((i % 8) * 0.35 + 1.4) + 's'" [option]="o" [hubName]="stations.name(o.hub)" [clsLabel]="clsName()" [budget]="budgetNum()" />
               }
             </div>
           } @else {
@@ -89,7 +100,7 @@ import {
           }
         </section>
       } @else if (searching()) {
-        <section class="mt-8 grid items-start gap-4 lg:grid-cols-2" aria-label="Loading results">
+        <section class="mt-8 grid items-start gap-[14px] lg:grid-cols-2" aria-label="Loading results">
           @for (i of [1, 2, 3, 4]; track i) {
             <div class="rv-card rv-skeleton p-4" aria-hidden="true">
               <div class="rv-pulse mb-3 h-6 w-24 rounded bg-[var(--line)]"></div>
@@ -162,6 +173,13 @@ export class ResultsPageComponent implements OnInit {
     const p = this.params();
     if (!p) return '';
     return `${this.stations.name(p.from) || p.from} to ${this.stations.name(p.to) || p.to}`;
+  });
+
+  /** Route for the summary card's first line: 'Gorakhpur \u2192 New Delhi'. */
+  readonly routeArrow = computed(() => {
+    const p = this.params();
+    if (!p) return '';
+    return `${this.stations.name(p.from) || p.from} \u2192 ${this.stations.name(p.to) || p.to}`;
   });
 
   readonly summary = computed(() => {

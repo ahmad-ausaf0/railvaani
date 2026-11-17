@@ -16,7 +16,7 @@ test('chips: one per class, cheapest first, stamp text and tone carried', () => 
   assert.equal(chips[1]!.status, 'WL GNWL12/12');
   assert.equal(chips[2]!.status, 'RAC 4');
   assert.equal(chips[0]!.tone, 'rv-avail-ok');
-  assert.equal(chips[1]!.tone, 'rv-avail-muted');
+  assert.equal(chips[1]!.tone, 'rv-avail-wl');
   assert.equal(chips[2]!.tone, 'rv-avail-rac');
 });
 
