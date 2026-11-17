@@ -248,6 +248,7 @@ button, a, input, select { min-height: 48px; }
 .rv-stamp-ok { color: var(--ok); }
 .rv-stamp-rac { color: var(--rac); }
 .rv-stamp-bad { color: var(--bad); }
+.rv-stamp-wl { color: var(--wl); }
 .rv-stamp-muted { color: var(--ink-soft); }
 .rv-avail-ok { color: var(--ok); font-weight: 800; }
 .rv-avail-rac { color: var(--rac); font-weight: 800; }
@@ -292,7 +293,7 @@ button, a, input, select { min-height: 48px; }
   border-radius: 999px; padding: 0.15rem 0.5rem; font-size: 0.72rem; background: var(--card);
 }
 .rv-date-ok { border-color: var(--ok); color: var(--ok); }
-.rv-date-warn { border-color: var(--rac); color: var(--rac); }
+.rv-date-wl { border-color: var(--wl); color: var(--wl); }
 .rv-date-na { border-color: var(--ink-soft); color: var(--ink-soft); }
 
 /* listbox on the station fields */

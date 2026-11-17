@@ -321,7 +321,7 @@ export class OptionCardComponent {
           cls = 'rv-date-ok';
         } else if (av.state === 'WL') {
           text = av.count > 0 ? `WL ${av.count}` : 'WL';
-          cls = 'rv-date-warn';
+          cls = 'rv-date-wl';
         }
       }
       const title = av?.asOf ? `ConfirmTkt snapshot as of ${this.asOfTime(av.asOf)} IST` : '';

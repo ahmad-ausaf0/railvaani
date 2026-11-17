@@ -1,161 +1,12 @@
-import { expect, test, type Locator, type Page, type Route } from '@playwright/test';
+import { expect, test, type Locator } from '@playwright/test';
+import { installFixtures, istDate } from './theme-fixtures';
 
 /**
- * W2 theme guard, run against deterministic provider fixtures so the
- * presentation assertions never depend on live upstreams. The search runs in
- * the browser against ConfirmTkt (JSON) and erail (text, via a relay); both
- * are intercepted here. Fixture train times are computed from the current IST
- * clock, so the trains are never already departed and the today-only notice
- * path is reachable at any hour the suite runs.
+ * W2/W2.1 theme guard, run against deterministic provider fixtures so the
+ * presentation assertions never depend on live upstreams. Fixture times come
+ * from the clock installFixtures pins (08:00 IST on the day the suite runs),
+ * so every run is identical no matter what hour it executes at.
  */
-
-/** IST is UTC+5:30 with no DST, so shifting the epoch gives IST wall time. */
-function istNow(): number {
-  return Date.now() + 19_800_000;
-}
-
-function istDate(offsetDays = 0): string {
-  return new Date(istNow() + offsetDays * 86_400_000).toISOString().slice(0, 10);
-}
-
-/** IST wall clock HH:MM, minutes from now. */
-function istClock(minsFromNow: number): string {
-  const d = new Date(istNow() + minsFromNow * 60_000);
-  return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
-}
-
-interface CtClass {
-  availability: string;
-  fare: number;
-  cacheTime: string;
-}
-
-/** ConfirmTkt's own cache stamp; the UI shows it as the snapshot time. */
-const SNAPSHOT = '2026-11-17T10:05:00';
-
-function cls(availability: string, fare: number): CtClass {
-  return { availability, fare, cacheTime: SNAPSHOT };
-}
-
-function ctTrain(
-  no: string,
-  name: string,
-  from: string,
-  to: string,
-  dep: string,
-  arr: string,
-  duration: number,
-  classes: Record<string, CtClass>,
-) {
-  return {
-    trainNumber: no,
-    trainName: name,
-    fromStnCode: from,
-    toStnCode: to,
-    departureTime: dep,
-    arrivalTime: arr,
-    duration,
-    runningDays: '1111111',
-    avlClasses: Object.keys(classes),
-    availabilityCache: classes,
-  };
-}
-
-/** One direct card carries all four chip tones; two leg trains make one split
- *  via LKO (leg 2 departs 105 minutes after leg 1 arrives). */
-function trainListFixture(from: string, to: string): unknown {
-  const key = `${from}|${to}`;
-  if (key === 'GKP|NDLS') {
-    return {
-      data: {
-        trainList: [
-          ctTrain('12555', 'Gorakhdham Express', 'GKP', 'NDLS', istClock(150), istClock(930), 780, {
-            SL: cls('AVAILABLE 122', 235),
-            '3A': cls('GNWL12', 625),
-            '2A': cls('RAC 4', 890),
-            '1A': cls('REGRET', 1520),
-          }),
-          ctTrain('12561', 'Gorakhpur Intercity', 'GKP', 'NDLS', istClock(240), istClock(660), 420, {
-            SL: cls('AVAILABLE 30', 255),
-          }),
-          ctTrain('12565', 'Gorakhpur Fast', 'GKP', 'NDLS', istClock(390), istClock(840), 450, {
-            SL: cls('AVAILABLE 12', 225),
-          }),
-        ],
-      },
-    };
-  }
-  if (key === 'GKP|LKO') {
-    return {
-      data: {
-        trainList: [
-          ctTrain('15008', 'Gorakhpur Passenger', 'GKP', 'LKO', istClock(120), istClock(390), 270, {
-            SL: cls('AVAILABLE 40', 135),
-          }),
-        ],
-      },
-    };
-  }
-  if (key === 'LKO|NDLS') {
-    return {
-      data: {
-        trainList: [
-          ctTrain('12533', 'Lucknow Express', 'LKO', 'NDLS', istClock(495), istClock(855), 360, {
-            SL: cls('AVAILABLE 80', 245),
-          }),
-        ],
-      },
-    };
-  }
-  return { data: { trainList: [] } };
-}
-
-/** erail's Alternate (via suggestions) answer: Lucknow as the only hub. */
-const HUB_BODY = 'header~a^Lucknow^LKO';
-
-/** erail's TRAINROUTE answer, dot-clock times as the provider expects. */
-const ROUTE_BODY = [
-  'header',
-  'j~GKP~Gorakhpur~First~09.00~j~0~1',
-  'j~LKO~Lucknow~13.30~13.40~j~270~1',
-  'j~NDLS~New Delhi~21.30~Last~j~760~1',
-].join('^');
-
-/** erail's train-number lookup: the route id sits at field 33. */
-function routeIdBody(trainNo: string): string {
-  const fields: string[] = [trainNo, ...Array<string>(32).fill('j'), '12345'];
-  return `header~${fields.join('~')}`;
-}
-
-async function installFixtures(page: Page): Promise<void> {
-  await page.route('**/api/v1/trains/search*', async (route: Route) => {
-    const u = new URL(route.request().url());
-    const body = trainListFixture(
-      u.searchParams.get('sourceStationCode') ?? '',
-      u.searchParams.get('destinationStationCode') ?? '',
-    );
-    await route.fulfill({ json: body });
-  });
-  await page.route('**/data.aspx*', async (route: Route) => {
-    const u = new URL(route.request().url());
-    if (u.searchParams.get('Action') === 'Alternate') {
-      await route.fulfill({ contentType: 'text/plain', body: HUB_BODY });
-    } else if (u.searchParams.get('Action') === 'TRAINROUTE') {
-      await route.fulfill({ contentType: 'text/plain', body: ROUTE_BODY });
-    } else {
-      await route.fulfill({ status: 404, contentType: 'text/plain', body: '' });
-    }
-  });
-  await page.route('**/getTrains.aspx*', async (route: Route) => {
-    const u = new URL(route.request().url());
-    const no = (u.searchParams.get('TrainNo') ?? '').trim();
-    if (no) {
-      await route.fulfill({ contentType: 'text/plain', body: routeIdBody(no) });
-    } else {
-      await route.fulfill({ status: 404, contentType: 'text/plain', body: '' });
-    }
-  });
-}
 
 /** Computed styles of one element, read with getPropertyValue. */
 async function styleOf(locator: Locator, props: string[]): Promise<Record<string, string>> {
@@ -199,6 +50,20 @@ test('results theme: summary card, notice, chip pairs, split banner, motion', as
   const wlStyle = await styleOf(wl, ['background-color', 'color']);
   expect(wlStyle['background-color']).toBe('rgb(237, 233, 253)');
   expect(wlStyle['color']).toBe('rgb(90, 63, 214)');
+  // W2.1: the waitlist violet reaches the stamps too. The stamp border rides
+  // on currentColor, so the same violet rims it while the shape and tilt hold.
+  const wlStamp = page.locator('.rv-stamp-wl').first();
+  const stampStyle = await styleOf(wlStamp, ['color', 'border-bottom-color']);
+  expect(stampStyle['color']).toBe('rgb(90, 63, 214)');
+  expect(stampStyle['border-bottom-color']).toBe('rgb(90, 63, 214)');
+
+  // W2.1: per-date strip WL dates go violet as well; RAC dates keep their tone.
+  const wlDate = page.locator('.rv-date-wl').first();
+  await expect(wlDate).toBeVisible({ timeout: 20_000 });
+  const dateStyle = await styleOf(wlDate, ['color', 'border-top-color']);
+  expect(dateStyle['color']).toBe('rgb(90, 63, 214)');
+  expect(dateStyle['border-top-color']).toBe('rgb(90, 63, 214)');
+
   const okChip = page.locator('.rv-class-chip.rv-avail-ok').first();
   const okStyle = await styleOf(okChip, ['background-color', 'color']);
   expect(okStyle['background-color']).toBe('rgb(229, 244, 235)');

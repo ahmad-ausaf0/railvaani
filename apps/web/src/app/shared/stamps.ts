@@ -1,21 +1,28 @@
 import type { Availability } from '@railvaani/train-core';
 
-export type StampTone = 'rv-stamp-ok' | 'rv-stamp-rac' | 'rv-stamp-bad' | 'rv-stamp-muted';
+export type StampTone =
+  | 'rv-stamp-ok'
+  | 'rv-stamp-rac'
+  | 'rv-stamp-bad'
+  | 'rv-stamp-wl'
+  | 'rv-stamp-muted';
 export type AvailTone = 'rv-avail-ok' | 'rv-avail-rac' | 'rv-avail-bad' | 'rv-avail-muted' | 'rv-avail-wl';
 
 /** Pure presentation: a seat status to its stamp colour class.
- *  Available green, RAC amber, waitlist and unchecked neutral, regret red. */
+ *  Available green, RAC amber, waitlist violet (W2.1), unchecked neutral,
+ *  regret red. */
 export function stampTone(a?: { state?: string } | null): StampTone {
   const s = a?.state ?? '';
   if (s === 'AVAILABLE') return 'rv-stamp-ok';
   if (s === 'RAC') return 'rv-stamp-rac';
+  if (s === 'WL') return 'rv-stamp-wl';
   if (s === 'REGRET' || s === 'NOT_AVAILABLE') return 'rv-stamp-bad';
   return 'rv-stamp-muted';
 }
 
 /** Pure presentation: the same status as coloured text for table rows.
- *  Waitlist carries its own violet pair (chips and table rows alike); stamps
- *  stay neutral for unchecked and muted. */
+ *  Waitlist carries its own violet pair (chips, stamps and table rows alike);
+ *  unchecked and muted stay neutral. */
 export function availTone(a?: { state?: string } | null): AvailTone {
   if (a?.state === 'WL') return 'rv-avail-wl';
   const t = stampTone(a);
