@@ -81,6 +81,11 @@ const ALL_DAYS: Weekday[] = [1, 2, 3, 4, 5, 6, 7];
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+/** One fetch attempt never hangs: every call is raced against this timeout
+ *  so a stalled upstream request can never pin a caller (a search's status
+ *  line) forever. AGENTS.md: 8-second timeouts. */
+const FETCH_TIMEOUT_MS = 8_000;
+
 function normaliseClock(raw: string | undefined): string {
   const m = String(raw ?? '').trim().match(/^(\d{1,2})[:.](\d{2})/);
   if (!m) return '00:00';
@@ -435,6 +440,15 @@ export class ConfirmTktProvider implements TrainDataProvider {
     }
   }
 
+  private async fetchWithTimeout(url: string, label: string): Promise<Response> {
+    return Promise.race([
+      this.fetchImpl(url, { headers: this.headers() }),
+      sleep(FETCH_TIMEOUT_MS).then(() => {
+        throw new ProviderError('provider_down', `${label} timed out after ${FETCH_TIMEOUT_MS / 1000}s.`);
+      }),
+    ]);
+  }
+
   private async fetchJson(url: string, label: string): Promise<CtEnvelope> {
     let lastErr: unknown = new ProviderError('provider_down', `${label}: no attempt made.`);
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -443,7 +457,7 @@ export class ConfirmTktProvider implements TrainDataProvider {
       this.lastStart = start;
       try {
         await sleep(Math.max(0, start - this.now()));
-        const res = await this.fetchImpl(url, { headers: this.headers() });
+        const res = await this.fetchWithTimeout(url, label);
         if (res.status === 429 || res.status >= 500) {
           lastErr = new ProviderError('provider_down', `${label} returned HTTP ${res.status}.`);
           await sleep(1500);

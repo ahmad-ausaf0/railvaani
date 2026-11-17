@@ -25,6 +25,23 @@ export function visibleError(error: string, hasOptions: boolean): string {
   return hasOptions ? '' : error;
 }
 
+/** Still-pending seat checks are abandoned in the UI this long after the
+ *  options first rendered: cards keep their last-known status and the status
+ *  line clears. The check pass must never hold the line indefinitely. */
+export const SEAT_CHECK_CAP_MS = 30_000;
+
+/** The status line for the post-results seat-check pass. 'Checking seats…'
+ *  while the pass is pending, and '' once it settles or once the 30-second
+ *  cap has expired (pending checks abandoned, last-known statuses kept). */
+export function seatCheckLine(
+  checking: boolean,
+  resultsRenderedAtMs: number | null,
+  nowMs: number,
+): string {
+  if (!checking || resultsRenderedAtMs === null) return '';
+  return nowMs - resultsRenderedAtMs >= SEAT_CHECK_CAP_MS ? '' : 'Checking seats…';
+}
+
 /** Header note for options the Any-class budget filter hid. */
 export function budgetHiddenNote(hidden: number, budget?: number): string | null {
   if (hidden <= 0 || budget === undefined) return null;

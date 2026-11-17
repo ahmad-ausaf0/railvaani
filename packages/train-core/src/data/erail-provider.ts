@@ -76,6 +76,10 @@ interface LegInfo {
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+/** One fetch attempt never hangs: raced against this timeout (AGENTS.md:
+ *  8-second timeouts) so a stalled request or relay can never pin a search. */
+const FETCH_TIMEOUT_MS = 8_000;
+
 function dotClock(v: string): string | null {
   const m = /^(\d{1,2})\.(\d{2})$/.exec(v.trim());
   if (!m) return null;
@@ -448,9 +452,14 @@ export class ErailProvider implements TrainDataProvider {
   }
 
   private async doFetch(target: string): Promise<string> {
-    const res = await this.fetchImpl(target, {
-      headers: { 'User-Agent': 'RailVaani/0.3 (train schedule demo)' } as Record<string, string>,
-    });
+    const res = await Promise.race([
+      this.fetchImpl(target, {
+        headers: { 'User-Agent': 'RailVaani/0.3 (train schedule demo)' } as Record<string, string>,
+      }),
+      sleep(FETCH_TIMEOUT_MS).then(() => {
+        throw new ProviderError('provider_down', `Upstream timed out after ${FETCH_TIMEOUT_MS / 1000}s.`);
+      }),
+    ]);
     if (!res.ok) throw new ProviderError('provider_down', `Upstream returned HTTP ${res.status}.`);
     let text = (await res.text()).trim();
     // Reader relays (r.jina.ai) wrap the payload in a short preamble; erail

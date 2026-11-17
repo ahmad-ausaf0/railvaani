@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  SEAT_CHECK_CAP_MS,
   SLOW_SEARCH_LINE,
   budgetHiddenNote,
+  seatCheckLine,
   slowSearchLine,
   visibleError,
 } from './search-status';
@@ -25,4 +27,18 @@ test('budget note: the header states how many options the budget hid', () => {
   assert.equal(budgetHiddenNote(1, 600), '1 option hidden by your ₹600 budget');
   assert.equal(budgetHiddenNote(0, 600), null, 'nothing hidden, no note');
   assert.equal(budgetHiddenNote(3, undefined), null, 'no budget, no note');
+});
+
+test('seatCheckLine: pending checks show Checking seats', () => {
+  assert.equal(seatCheckLine(true, 1000, 1000 + 29_999), 'Checking seats…');
+});
+
+test('seatCheckLine: checks abandoned at the 30s cap, the line clears', () => {
+  assert.equal(seatCheckLine(true, 1000, 1000 + SEAT_CHECK_CAP_MS), '');
+  assert.equal(seatCheckLine(true, 1000, 1000 + 90_000), '');
+});
+
+test('seatCheckLine: empty when the pass settled or never started', () => {
+  assert.equal(seatCheckLine(false, 1000, 2000), '');
+  assert.equal(seatCheckLine(true, null, 2000), '');
 });

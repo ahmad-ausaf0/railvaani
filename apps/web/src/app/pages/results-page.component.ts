@@ -9,7 +9,9 @@ import { StationsService } from '../services/stations.service';
 import { SearchParams, istToday, parseSearchParams } from '../shared/search-params';
 import { classLabel } from '../shared/train-classes';
 import {
+  SEAT_CHECK_CAP_MS,
   budgetHiddenNote,
+  seatCheckLine,
   slowSearchLine,
   visibleError,
 } from '../shared/search-status';
@@ -121,6 +123,8 @@ export class ResultsPageComponent implements OnInit {
   /** True once the search has run 20s with no options yet: a note, not an error. */
   readonly slow = signal(false);
   readonly classDetails = signal<Record<string, ClassDetail>>({});
+  /** When the options first rendered, for the 30s seat-check cap. */
+  readonly resultsAt = signal<number | null>(null);
   private runId = 0;
 
   readonly stepLine = computed(() => {
@@ -129,8 +133,7 @@ export class ResultsPageComponent implements OnInit {
       if (slowLine) return slowLine;
       return this.stage() === 'checking' ? 'Checking seats…' : 'Finding trains…';
     }
-    if (this.checking()) return 'Checking seats…';
-    return '';
+    return seatCheckLine(this.checking(), this.resultsAt(), Date.now());
   });
 
   /** The error banner hides the moment options are on screen. */
@@ -238,6 +241,7 @@ export class ResultsPageComponent implements OnInit {
     this.error.set('');
     this.partialNote.set(false);
     this.results.set(null);
+    this.resultsAt.set(null);
     this.classDetails.set({});
     this.searching.set(true);
     this.stage.set('finding');
@@ -267,6 +271,7 @@ export class ResultsPageComponent implements OnInit {
         // A failure already settled the run; options that arrived late still render.
         if (opts.length > 0) {
           this.results.set(opts);
+          this.resultsAt.set(Date.now());
           this.partialNote.set(true);
           void this.loadClassDetails(opts, p, id);
         }
@@ -274,7 +279,12 @@ export class ResultsPageComponent implements OnInit {
       }
       settled = true;
       clearTimeout(timer);
+      // Options on screen end the search phase: without this the step line's
+      // searching branch would keep saying Checking seats long after the pass
+      // ends (the only other searching.set(false) is the failure path).
+      this.searching.set(false);
       this.results.set(opts);
+      this.resultsAt.set(Date.now());
       // Options on screen outrank any error: it clears the moment they render.
       if (opts.length > 0 && this.error()) this.error.set('');
       if (opts.length === 0) {
@@ -303,6 +313,12 @@ export class ResultsPageComponent implements OnInit {
     const dates = this.recentDates(p.date);
     let warmed = false;
     this.checking.set(true);
+    // Terminal cap: still-pending seat checks are abandoned in the UI 30s
+    // after the options first rendered. Cards keep their last-known status;
+    // the status line clears and never spins indefinitely.
+    const cap = setTimeout(() => {
+      if (id === this.runId) this.checking.set(false);
+    }, SEAT_CHECK_CAP_MS);
     try {
       for (const o of opts) {
         if (id !== this.runId) return;
@@ -328,6 +344,7 @@ export class ResultsPageComponent implements OnInit {
         this.classDetails.set({ ...details });
       }
     } finally {
+      clearTimeout(cap);
       if (id === this.runId) this.checking.set(false);
     }
   }
