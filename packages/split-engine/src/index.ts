@@ -843,12 +843,16 @@ export async function findOptions(
   // Twin-station duplicates go before the hub-diversity fill, so slots they
   // free go to genuinely different options.
   const pairDeduped = dedupeByTrains(deduped);
-  // Any mode makes the budget a hard filter: options above it are not shown,
-  // and how many were hidden is reported for the results header.
+  // Any mode makes the budget a hard filter: options above it are not shown.
+  // The hidden count is traveller-level only and is taken here, after
+  // de-duplication and before the hub slot caps: a direct counts when its
+  // headline price exceeds the budget, a split when its total does. Per-class
+  // combinations, per-leg evaluations and hub attempts never reach this list,
+  // so none of them can enter the count.
   const hardBudget = anyMode || query.onlyWithinBudget === true;
   const filtered = hardBudget ? pairDeduped.filter((o) => o.withinBudget) : pairDeduped;
   if (anyMode && query.hiddenByBudget) {
-    query.hiddenByBudget.count = pairDeduped.length - filtered.length;
+    query.hiddenByBudget.count = pairDeduped.filter((o) => !o.withinBudget).length;
   }
   if (legacyMax !== undefined) {
     return filtered.slice(0, legacyMax);

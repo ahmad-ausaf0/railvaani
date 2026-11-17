@@ -627,6 +627,111 @@ test('any class: budget is a hard filter and reports how many options it hid', a
   assert.equal(all.length, 2, 'without a budget both options show');
 });
 
+const AV50 = { state: 'AVAILABLE', count: 50 };
+
+/** The hidden-count fixture: 2 directs and 1 split exceed a Rs 600 budget,
+ *  every other option fits it. Split legs sit at different hubs so no
+ *  cross-pair changes the count. */
+function budgetFixture() {
+  return [
+    { number: 'D1', from: 'AAA', to: 'ZZZ', depTime: '05:00', durationMins: 300,
+      fares: { SL: 500 }, availAll: { SL: AV50 } },
+    { number: 'D2', from: 'AAA', to: 'ZZZ', depTime: '05:30', durationMins: 300,
+      fares: { SL: 550 }, availAll: { SL: AV50 } },
+    { number: 'D3', from: 'AAA', to: 'ZZZ', depTime: '06:00', durationMins: 300,
+      fares: { SL: 700 }, availAll: { SL: AV50 } },
+    { number: 'D4', from: 'AAA', to: 'ZZZ', depTime: '06:30', durationMins: 300,
+      fares: { SL: 750 }, availAll: { SL: AV50 } },
+    { number: 'M1', from: 'AAA', to: 'H1', depTime: '09:00', durationMins: 240,
+      fares: { SL: 200, '3A': 350 }, availAll: { SL: AV50, '3A': AV50 } },
+    { number: 'M2', from: 'H1', to: 'ZZZ', depTime: '14:30', durationMins: 240,
+      fares: { SL: 300, '3A': 450 }, availAll: { SL: AV50, '3A': AV50 } },
+    { number: 'L1', from: 'AAA', to: 'H2', depTime: '07:00', durationMins: 240,
+      fares: { SL: 400, '3A': 600 }, availAll: { SL: AV50, '3A': AV50 } },
+    { number: 'L2', from: 'H2', to: 'ZZZ', depTime: '12:30', durationMins: 240,
+      fares: { SL: 400, '3A': 600 }, availAll: { SL: AV50, '3A': AV50 } },
+  ];
+}
+
+test('hidden count: 2 directs and 1 split over budget read 3, in eager and deferred runs', async () => {
+  for (const availabilityMode of ['eager', 'deferred'] as const) {
+    const { provider } = makeGeoProvider(budgetFixture(), { hubs: ['H1', 'H2'] });
+    const hidden = { count: -1 };
+    const opts = await findOptions(provider, {
+      from: 'AAA', to: 'ZZZ', date: '2026-12-01', cls: 'ANY', budgetPerHead: 600,
+      hiddenByBudget: hidden, availabilityMode, maxDirects: 20, maxSplits: 8,
+    });
+    assert.equal(hidden.count, 3, `${availabilityMode}: D3, D4 and the L1/L2 split are the budget exclusions`);
+    const shown = new Set(opts.map((o) => o.legs[0]!.trainNumber));
+    assert.ok(shown.has('D1') && shown.has('D2'), 'within-budget directs show');
+    assert.ok(opts.some((o) => o.type === 'split' && o.legs[0]!.trainNumber === 'M1'), 'the within-budget split shows');
+    assert.ok(!shown.has('D3') && !shown.has('D4'), 'over-budget directs hide');
+    assert.ok(!opts.some((o) => o.legs[0]!.trainNumber === 'L1'), 'the over-budget split hides');
+  }
+});
+
+test('hidden count: a twin duplicate of the over-budget split counts once', async () => {
+  // The same L1/L2 pair is also enumerated through H3, a twin station, at the
+  // same 800 total: one traveller option, one hidden count.
+  const trains = [
+    ...budgetFixture(),
+    { number: 'L1', from: 'AAA', to: 'H3', depTime: '07:00', durationMins: 240,
+      fares: { SL: 400 }, availAll: { SL: AV50 } },
+    { number: 'L2', from: 'H3', to: 'ZZZ', depTime: '12:30', durationMins: 240,
+      fares: { SL: 400 }, availAll: { SL: AV50 } },
+  ];
+  const { provider } = makeGeoProvider(trains, { hubs: ['H1', 'H2', 'H3'] });
+  const hidden = { count: -1 };
+  await findOptions(provider, {
+    from: 'AAA', to: 'ZZZ', date: '2026-12-01', cls: 'ANY', budgetPerHead: 600,
+    hiddenByBudget: hidden, availabilityMode: 'deferred', maxDirects: 20, maxSplits: 8,
+  });
+  assert.equal(hidden.count, 3, 'the twin instance does not add to the count');
+});
+
+test('hidden count: zero with no budget and zero when nothing exceeds it', async () => {
+  const noBudget = makeGeoProvider(budgetFixture(), { hubs: ['H1', 'H2'] });
+  const none = { count: -1 };
+  await findOptions(noBudget.provider, {
+    from: 'AAA', to: 'ZZZ', date: '2026-12-01', cls: 'ANY',
+    hiddenByBudget: none, availabilityMode: 'deferred', maxDirects: 20, maxSplits: 8,
+  });
+  assert.equal(none.count, 0, 'no budget, nothing hidden');
+
+  const slack = makeGeoProvider(budgetFixture(), { hubs: ['H1', 'H2'] });
+  const fits = { count: -1 };
+  await findOptions(slack.provider, {
+    from: 'AAA', to: 'ZZZ', date: '2026-12-01', cls: 'ANY', budgetPerHead: 900,
+    hiddenByBudget: fits, availabilityMode: 'deferred', maxDirects: 20, maxSplits: 8,
+  });
+  assert.equal(fits.count, 0, 'every option fits a 900 budget');
+});
+
+test('hidden count: options beyond the deferred refine slice keep their true budget status', async () => {
+  // 30 directs within budget and 2 over: the refine covers the top 28, so the
+  // two within-budget directs just outside it must not be miscounted as
+  // budget-hidden.
+  const trains: any[] = [];
+  for (let i = 1; i <= 30; i++) {
+    trains.push({
+      number: `W${i}`, from: 'AAA', to: 'ZZZ',
+      depTime: `0${(i % 9) + 1}:${String((i * 7) % 60).padStart(2, '0')}`,
+      durationMins: 300, fares: { SL: 100 + i }, availAll: { SL: AV50 },
+    });
+  }
+  trains.push({ number: 'X1', from: 'AAA', to: 'ZZZ', depTime: '11:00', durationMins: 300,
+    fares: { SL: 700 }, availAll: { SL: AV50 } });
+  trains.push({ number: 'X2', from: 'AAA', to: 'ZZZ', depTime: '12:00', durationMins: 300,
+    fares: { SL: 800 }, availAll: { SL: AV50 } });
+  const { provider } = makeGeoProvider(trains, { hubs: [] });
+  const hidden = { count: -1 };
+  await findOptions(provider, {
+    from: 'AAA', to: 'ZZZ', date: '2026-12-01', cls: 'ANY', budgetPerHead: 600,
+    hiddenByBudget: hidden, availabilityMode: 'deferred', maxDirects: 20, maxSplits: 8,
+  });
+  assert.equal(hidden.count, 2, 'only the two genuinely over-budget directs count');
+});
+
 test('single-class mode keeps the over-budget badge: options rank last but still show', async () => {
   const make = () => makeGeoProvider([
     { number: 'D1', from: 'AAA', to: 'ZZZ', depTime: '06:00', durationMins: 300,
