@@ -631,6 +631,14 @@ export async function findOptions(
   const availabilityMode = query.availabilityMode ?? 'eager';
   const withAvailability = availabilityMode !== 'deferred';
   const anyMode = query.cls === 'ANY';
+  // The REQUESTED class is validated once here: an unknown code (a stale
+  // bundle, a bad URL) must fail loudly, never silently zero the search —
+  // every leg build would return null and findOptions would return [].
+  // Per-train and per-leg data problems keep the existing isolation: one
+  // bad leg or hub never kills the search.
+  if (query.cls && !anyMode && !CLASS_LABELS[query.cls as TrainClass]) {
+    throw new Error(`Unknown train class "${query.cls}".`);
+  }
   const nowIst = istNow(Date.now());
   const alreadyLeft = (date: string, depTime: string): boolean =>
     query.excludeDeparted === true &&

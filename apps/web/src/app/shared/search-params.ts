@@ -1,13 +1,10 @@
-import type { SearchClass } from '@railvaani/train-core';
-
-import { isSelectableClass } from './train-classes';
-
-/** A validated search, straight from the /results query params. */
+/** A validated search, straight from the /results query params. Class-free:
+ *  every search runs the engine's Any-class path; a cls parameter left over
+ *  in an old saved link is ignored. */
 export interface SearchParams {
   from: string;
   to: string;
   date: string;
-  cls: SearchClass;
   quota: string;
   budget?: number;
 }
@@ -26,11 +23,9 @@ export function parseSearchParams(
   const from = (raw['from'] ?? '').trim().toUpperCase();
   const to = (raw['to'] ?? '').trim().toUpperCase();
   const date = (raw['date'] ?? '').trim();
-  const cls = (raw['cls'] ?? '').trim().toUpperCase();
   const quota = (raw['quota'] ?? '').trim() || 'GN';
   if (!from || !to || from === to) return null;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date < today) return null;
-  if (!isSelectableClass(cls)) return null;
   const budgetRaw = raw['budget']?.trim();
   let budget: number | undefined;
   if (budgetRaw) {
@@ -38,5 +33,5 @@ export function parseSearchParams(
     if (!Number.isFinite(n) || n <= 0) return null;
     budget = n;
   }
-  return { from, to, date, cls: cls as SearchClass, quota, budget };
+  return { from, to, date, quota, budget };
 }

@@ -63,11 +63,11 @@ import {
               @for (o of direct(); track trackKey(o)) {
                 <rv-option-card [option]="o" [classDetail]="classDetailFor(o)"
                   [dateWise]="classDetailFor(o)?.dateWise" [dateWiseDates]="classDetailFor(o)?.dateWiseDates"
-                  [dateWiseLabel]="dateWiseLabelFor(o)" [clsCode]="params()?.cls ?? ''" [clsLabel]="clsName()" [budget]="budgetNum()" />
+                  [dateWiseLabel]="dateWiseLabelFor(o)" [clsLabel]="clsName()" [budget]="budgetNum()" />
               }
             </div>
           } @else {
-            <p class="rv-note mt-3">No direct trains on this route and class. A split journey may still work.</p>
+            <p class="rv-note mt-3">No direct trains on this route. A split journey may still work.</p>
           }
 
           <h3 class="rv-section mt-6">Split options (two tickets, one journey)</h3>
@@ -161,24 +161,17 @@ export class ResultsPageComponent implements OnInit {
     if (!p) return '';
     const parts: string[] = [`${this.stations.name(p.from) || p.from} → ${this.stations.name(p.to) || p.to}`];
     parts.push(this.fmtDate(p.date));
-    parts.push(classLabel(p.cls));
+    parts.push('All classes');
     if (p.budget !== undefined) parts.push(`Budget ₹${p.budget}`);
     const hidden = budgetHiddenNote(this.rail.budgetHidden(), p.budget);
     if (hidden) parts.push(hidden);
     return parts.join(' · ');
   });
 
-  readonly clsName = computed(() => {
-    const p = this.params();
-    return p ? classLabel(p.cls) : '';
-  });
+  readonly clsName = computed(() => 'All classes');
 
-  /** Label for a card's per-date strip: the searched class, or the headline
-   *  class of a direct option in Any-class mode. */
+  /** Label for a card's per-date strip: the option's headline class. */
   dateWiseLabelFor(o: SplitOption): string {
-    const p = this.params();
-    if (!p) return '';
-    if (p.cls !== 'ANY') return classLabel(p.cls);
     return classLabel(o.legs[0]?.cls ?? 'SL');
   }
 
@@ -189,7 +182,6 @@ export class ResultsPageComponent implements OnInit {
         from: qp.get('from') ?? undefined,
         to: qp.get('to') ?? undefined,
         date: qp.get('date') ?? undefined,
-        cls: qp.get('cls') ?? undefined,
         quota: qp.get('quota') ?? undefined,
         budget: qp.get('budget') ?? undefined,
       });
@@ -210,7 +202,7 @@ export class ResultsPageComponent implements OnInit {
   editSearch(): void {
     const p = this.params();
     if (!p) return;
-    const qp: Record<string, string> = { from: p.from, to: p.to, date: p.date, cls: p.cls, quota: p.quota };
+    const qp: Record<string, string> = { from: p.from, to: p.to, date: p.date, quota: p.quota };
     if (p.budget !== undefined) qp['budget'] = String(p.budget);
     void this.router.navigate(['/'], { queryParams: qp });
   }
@@ -232,7 +224,7 @@ export class ResultsPageComponent implements OnInit {
     const prev = this.params();
     if (
       prev && prev.from === p.from && prev.to === p.to && prev.date === p.date &&
-      prev.cls === p.cls && prev.quota === p.quota && prev.budget === p.budget
+      prev.quota === p.quota && prev.budget === p.budget
     ) {
       return;
     }
@@ -261,7 +253,7 @@ export class ResultsPageComponent implements OnInit {
     }, 20_000);
     try {
       const opts = await this.rail.find(
-        p.from, p.to, p.date, p.cls, p.budget,
+        p.from, p.to, p.date, p.budget,
         (st) => {
           if (settled || id !== this.runId) return;
           this.stage.set(st.stage === 'checking_seats' ? 'checking' : 'finding');
@@ -286,7 +278,7 @@ export class ResultsPageComponent implements OnInit {
       // Options on screen outrank any error: it clears the moment they render.
       if (opts.length > 0 && this.error()) this.error.set('');
       if (opts.length === 0) {
-        this.error.set('No trains found for this route, class and date. Try another class or date.');
+        this.error.set('No trains found for this route and date. Try another date or station.');
       }
       void this.loadClassDetails(opts, p, id);
     } catch {
@@ -329,7 +321,7 @@ export class ResultsPageComponent implements OnInit {
           fares: this.rail.fareTableFor(leg.trainNumber, leg.from, leg.to),
           avail,
           dateWise: this.rail.dateWiseFor(
-            leg.trainNumber, leg.from, leg.to, p.cls === 'ANY' ? (leg.cls ?? 'SL') : p.cls, dates,
+            leg.trainNumber, leg.from, leg.to, leg.cls ?? 'SL', dates,
           ),
           dateWiseDates: dates,
         };

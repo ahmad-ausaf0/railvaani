@@ -1,6 +1,6 @@
 import { Injectable, signal } from '@angular/core';
 
-import { Availability, ConfirmTktProvider, ErailProvider, Station, SearchClass, TrainClass } from '@railvaani/train-core';
+import { Availability, ConfirmTktProvider, ErailProvider, Station, TrainClass } from '@railvaani/train-core';
 import { findOptions, SplitOption } from '@railvaani/split-engine';
 
 /** Live progress the UI shows while a search runs. */
@@ -45,7 +45,6 @@ export class RailService {
     from: string,
     to: string,
     date: string,
-    cls: SearchClass,
     budgetPerHead?: number,
     onProgress?: (p: SearchProgress) => void,
   ): Promise<SplitOption[]> {
@@ -54,7 +53,7 @@ export class RailService {
       from,
       to,
       date,
-      cls,
+      cls: 'ANY',
       quota: 'GN',
       budgetPerHead,
       availabilityMode: 'deferred',
@@ -66,7 +65,7 @@ export class RailService {
         ? (stage, done, total) => onProgress({ stage, done, total })
         : undefined,
     });
-    this.budgetHidden.set(cls === 'ANY' ? hiddenByBudget.count : 0);
+    this.budgetHidden.set(hiddenByBudget.count);
     return opts;
   }
 

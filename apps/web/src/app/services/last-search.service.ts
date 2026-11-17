@@ -7,7 +7,6 @@ export interface LastSearch {
   to: string;
   toName: string;
   date: string;
-  cls: string;
   quota: string;
   budget: string;
 }

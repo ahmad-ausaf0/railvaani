@@ -2,14 +2,12 @@ import { Component, OnInit, inject, signal } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
 
 import { Station } from '@railvaani/train-core';
-import type { SearchClass } from '@railvaani/train-core';
 
 import { StationInputComponent } from '../components/station-input.component';
 import { LastSearchService } from '../services/last-search.service';
 import { RailService } from '../services/rail.service';
 import { StationsService } from '../services/stations.service';
 import { VoiceIntentService } from '../services/voice-intent.service';
-import { TRAIN_CLASSES, ANY_CLASS, classLabel, isSelectableClass } from '../shared/train-classes';
 import { istToday } from '../shared/search-params';
 
 interface Recognition {
@@ -78,17 +76,9 @@ type SpeechEvent = { results: ArrayLike<ArrayLike<{ transcript: string }>> };
             />
           </div>
 
-          <div class="grid grid-cols-2 gap-3">
-            <div>
-              <label for="date" class="rv-label">Journey date</label>
-              <input id="date" type="date" class="rv-input" [value]="date()" [min]="minDate" (change)="date.set(d.value)" #d />
-            </div>
-            <div>
-              <label for="cls" class="rv-label">Class</label>
-              <select id="cls" class="rv-input" [value]="cls()" (change)="setCls(c.value)" #c>
-                @for (cl of classes; track cl) { <option [value]="cl">{{ classLabel(cl) }}</option> }
-              </select>
-            </div>
+          <div>
+            <label for="date" class="rv-label">Journey date</label>
+            <input id="date" type="date" class="rv-input" [value]="date()" [min]="minDate" (change)="date.set(d.value)" #d />
           </div>
 
           <div>
@@ -125,7 +115,6 @@ export class SearchPageComponent implements OnInit {
   private readonly voiceIntent = new VoiceIntentService();
   private readonly lastSearch = inject(LastSearchService);
 
-  readonly classes: SearchClass[] = [ANY_CLASS, ...TRAIN_CLASSES];
   readonly examples: ReadonlyArray<readonly [string, string]> = [
     ['Gorakhpur', 'New Delhi'], ['Patna', 'Mumbai'], ['Varanasi', 'Lucknow'], ['Chennai', 'Bengaluru'],
   ];
@@ -135,7 +124,6 @@ export class SearchPageComponent implements OnInit {
   readonly fromCode = signal<string | null>(null);
   readonly toCode = signal<string | null>(null);
   readonly date = signal('');
-  readonly cls = signal<SearchClass>('SL');
   readonly budget = signal('');
   readonly listening = signal(false);
   readonly voiceNote = signal('');
@@ -164,7 +152,6 @@ export class SearchPageComponent implements OnInit {
     const from = qp.get('from') ?? last?.from ?? '';
     const to = qp.get('to') ?? last?.to ?? '';
     const date = qp.get('date') ?? last?.date ?? '';
-    const clsRaw = qp.get('cls') ?? last?.cls ?? '';
     const budget = qp.get('budget') ?? last?.budget ?? '';
     if (from) {
       this.fromCode.set(from);
@@ -175,14 +162,9 @@ export class SearchPageComponent implements OnInit {
       this.toText.set(this.stations.name(to) || to);
     }
     if (date) this.date.set(date);
-    if (isSelectableClass(clsRaw)) this.cls.set(clsRaw as SearchClass);
     if (budget) this.budget.set(budget);
     if (!this.date()) this.date.set(this.minDate);
   }
-
-  classLabel(c: SearchClass): string { return classLabel(c); }
-
-  setCls(value: string): void { this.cls.set(value as SearchClass); }
 
   onFromQuery(q: string): void { this.fromSuggest.set(this.stations.search(q)); }
   onToQuery(q: string): void { this.toSuggest.set(this.stations.search(q)); }
@@ -223,7 +205,7 @@ export class SearchPageComponent implements OnInit {
     const date = this.date() || this.minDate;
     const budgetN = Number(this.budget());
     const budget = Number.isFinite(budgetN) && budgetN > 0 ? String(budgetN) : '';
-    const params: Record<string, string> = { from, to, date, cls: this.cls(), quota: 'GN' };
+    const params: Record<string, string> = { from, to, date, quota: 'GN' };
     if (budget) params['budget'] = budget;
     this.lastSearch.save({
       from,
@@ -231,7 +213,6 @@ export class SearchPageComponent implements OnInit {
       to,
       toName: this.stations.name(to) || this.toText(),
       date,
-      cls: this.cls(),
       quota: 'GN',
       budget,
     });

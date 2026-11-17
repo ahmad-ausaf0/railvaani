@@ -5,6 +5,7 @@ import {
   Availability,
   MockTrainProvider,
   ProviderError,
+  SearchClass,
   Station,
   Stop,
   Train,
@@ -527,6 +528,21 @@ test('origin loops: no split boards its second leg at the origin or its city clu
     hubs: ['HUBOK'],
   });
   assert.equal(okOpts.filter((o) => o.type === 'split').length, 1, 'a hub outside the origin cluster still splits');
+});
+
+test('an unknown requested class fails loudly instead of returning zero options', async () => {
+  // Regression guard: a stale engine bundle once treated 'ANY' as an
+  // unrecognized class, every leg build returned null, and the browser
+  // search silently returned 0 options while node probes worked. Entry
+  // validation now throws at once. Per-leg data isolation is untouched:
+  // a leg whose data fails still just drops out of the search.
+  const { provider } = makeGeoProvider([
+    { number: 'L1', from: 'AAA', to: 'ZZZ', depTime: '06:00', durationMins: 240, fares: { SL: 235 } },
+  ]);
+  await assert.rejects(
+    () => findOptions(provider, { from: 'AAA', to: 'ZZZ', date: '2026-12-01', cls: 'ZZZ' as SearchClass }),
+    /Unknown train class/,
+  );
 });
 
 test('any class: a confirmed mixed pair beats a same-class pair with a waitlisted leg', async () => {
