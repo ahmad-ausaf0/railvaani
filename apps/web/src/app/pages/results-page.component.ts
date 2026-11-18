@@ -89,7 +89,7 @@ import {
           @if (splits().length > 0) {
             <div class="mt-3 grid items-start gap-[14px] lg:grid-cols-2">
               @for (o of splits(); track trackKey(o); let i = $index) {
-                <!-- Splits start half a float cycle later: the two sections never move in sync. -->
+                <!-- Splits start later in the entrance stagger: the two sections never fade in together. -->
                 <rv-option-card [style.--float-delay]="((i % 8) * 0.35 + 1.4) + 's'" [option]="o" [hubName]="stations.name(o.hub)" [clsLabel]="clsName()" [budget]="budgetNum()" />
               }
             </div>

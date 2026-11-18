@@ -98,18 +98,35 @@ test('results theme: summary card, notice, chip pairs, split banner, motion', as
   );
   expect(splitShadow).toContain('0.14');
 
-  // 5. Float motion on rendered cards, staggered so no two share a phase.
-  const delays = await page.evaluate(() =>
-    Array.from(document.querySelectorAll('.rv-ticket, .rv-ticket-split')).map(
-      (el) => getComputedStyle(el).animationDelay,
-    ),
+  // 5. One-time entrance on rendered cards, staggered so no two share a phase,
+  //    and no looping animation anywhere on a card.
+  const cards = await page.evaluate(() =>
+    Array.from(document.querySelectorAll('.rv-ticket, .rv-ticket-split')).map((el) => {
+      const cs = getComputedStyle(el);
+      return { name: cs.animationName, count: cs.animationIterationCount, delay: cs.animationDelay };
+    }),
   );
-  expect(delays.length).toBeGreaterThanOrEqual(2);
-  expect(new Set(delays).size).toBe(delays.length);
-  const floatName = await page.evaluate(
-    () => getComputedStyle(document.querySelector('.rv-ticket') as Element).animationName,
+  expect(cards.length).toBeGreaterThanOrEqual(2);
+  expect(new Set(cards.map((c) => c.delay)).size).toBe(cards.length);
+  for (const c of cards) {
+    expect(c.name).toBe('rv-enter');
+    expect(c.count).toBe('1');
+  }
+
+  // 5b. Stillness: once the entrance has finished (fill mode does not hold the
+  //     final frame) every card computes transform none, so nothing moves until
+  //     a hover lifts it.
+  await page.waitForTimeout(2000);
+  const still = await page.evaluate(() =>
+    Array.from(document.querySelectorAll('.rv-ticket, .rv-ticket-split')).map((el) => {
+      const cs = getComputedStyle(el);
+      return { name: cs.animationName, transform: cs.transform };
+    }),
   );
-  expect(floatName).toBe('rv-float');
+  for (const c of still) {
+    expect(c.name).toBe('rv-enter');
+    expect(c.transform).toBe('none');
+  }
 
   // Gradient discipline holds on the results page too.
   const offenders = await page.evaluate(
@@ -134,7 +151,7 @@ test('departed notice is hidden for a future date', async ({ page }) => {
   await expect(page.locator('.rv-departed')).toHaveCount(0);
 });
 
-test('reduced motion turns the float off entirely', async ({ page }) => {
+test('reduced motion turns the entrance off entirely', async ({ page }) => {
   test.setTimeout(60_000);
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await installFixtures(page);

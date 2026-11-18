@@ -207,16 +207,22 @@ button, a, input, select { min-height: 48px; }
 .rv-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink); flex: none; }
 .rv-track-line { flex: 1 1 auto; height: 2px; background: var(--hairline); }
 
-/* Option-card motion: a gentle float, transform only, staggered by list
-   position via --float-delay (set per card in the results grid). On hover the
-   float pauses and the card lifts. Skeletons and status lines never float. */
+/* Option-card motion: a ONE-TIME entrance, opacity + transform only, staggered
+   by list position. The template sets --float-delay per card in the results
+   grid; it is reused here (scaled down) as the entrance delay. Cards run
+   rv-enter once and then sit completely still: no looping animation on result
+   cards. The hover lift stays a plain transition. Skeletons and status lines
+   keep their own pulse, which is not a card. */
 .rv-ticket,
 .rv-ticket-split {
-  animation: rv-float 5.5s ease-in-out infinite alternate;
-  animation-delay: var(--float-delay, 0s);
+  animation: rv-enter 0.45s ease-out backwards;
+  animation-delay: calc(var(--float-delay, 0s) * 0.3);
   transition: transform 0.25s ease, box-shadow 0.25s ease;
 }
-@keyframes rv-float { from { transform: translateY(0); } to { transform: translateY(-4px); } }
+@keyframes rv-enter {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 @media (hover: hover) {
   .rv-ticket:hover,
   .rv-ticket-split:hover { animation: none; transform: translateY(-5px); box-shadow: var(--shadow-lift); }
@@ -312,7 +318,7 @@ button, a, input, select { min-height: 48px; }
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
-  /* The float and the hover lift go off entirely; static looks stay. */
+  /* The entrance and the hover lift go off entirely; static looks stay. */
   .rv-ticket,
   .rv-ticket-split { animation: none; }
   .rv-ticket:hover,
