@@ -1,7 +1,5 @@
 import { expect, test } from '@playwright/test';
 
-import { installApiStubs } from './theme-fixtures';
-
 /** Mirror of StationsService.resolve over the stations.json rows. */
 function resolve(rows: [string, string][], input: string): [string, string] | null {
   const upper = input.trim().toUpperCase();
@@ -16,7 +14,6 @@ function resolve(rows: [string, string][], input: string): [string, string] | nu
 
 test('example chip sets matching badges and swap moves them with the fields', async ({ page }) => {
   // The swap button is desktop-only; widen the viewport so it is clickable.
-  await installApiStubs(page);
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto('/', { waitUntil: 'networkidle' });
 

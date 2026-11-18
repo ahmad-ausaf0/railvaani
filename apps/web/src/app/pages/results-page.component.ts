@@ -11,7 +11,6 @@ import { classLabel } from '../shared/train-classes';
 import {
   SEAT_CHECK_CAP_MS,
   budgetHiddenNote,
-  expandedSearchNote,
   seatCheckLine,
   slowSearchLine,
   visibleError,
@@ -59,9 +58,6 @@ import {
               }
             </div>
           </div>
-          @if (expandedNote(); as note) {
-            <p class="rv-note mt-1" role="status">{{ note }}</p>
-          }
           @if (isToday()) {
             <p class="rv-departed">
               <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3.5 2" /></svg>
@@ -160,9 +156,6 @@ export class ResultsPageComponent implements OnInit {
   readonly errorLine = computed(() => visibleError(this.error(), (this.results()?.length ?? 0) > 0));
 
   readonly budgetNum = computed(() => this.params()?.budget ?? null);
-
-  /** The header's plain line when a city cluster widened the search. */
-  readonly expandedNote = computed(() => expandedSearchNote(this.rail.expandedCities()));
 
   readonly shown = computed(() => {
     const list = [...(this.results() ?? [])];
@@ -317,9 +310,6 @@ export class ResultsPageComponent implements OnInit {
       this.searching.set(false);
       this.results.set(opts);
       this.resultsAt.set(Date.now());
-      // The API flags searches whose city pairs only partly succeeded;
-      // the A1 partial note stays.
-      this.partialNote.set(this.rail.partialResults());
       // Options on screen outrank any error: it clears the moment they render.
       if (opts.length > 0 && this.error()) this.error.set('');
       if (opts.length === 0) {
@@ -332,9 +322,7 @@ export class ResultsPageComponent implements OnInit {
       settled = true;
       clearTimeout(timer);
       this.searching.set(false);
-      // The service knows whether the failure was a 429 or something else;
-      // both keep the A1 contract's shape: a plain line, with Retry.
-      this.error.set(this.rail.failureMessage());
+      this.error.set('Train data could not be reached. Check your connection and try again.');
       if ((this.results()?.length ?? 0) > 0) {
         this.partialNote.set(true);
       } else {
