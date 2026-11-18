@@ -42,6 +42,13 @@ export function seatCheckLine(
   return nowMs - resultsRenderedAtMs >= SEAT_CHECK_CAP_MS ? '' : 'Checking seats…';
 }
 
+/** The results header's plain line for a city-clustered search: which
+ *  city's stations were all searched. Null when no end expanded. */
+export function expandedSearchNote(cities: string[]): string | null {
+  if (cities.length === 0) return null;
+  return `Searched all ${cities.join(' and ')} stations`;
+}
+
 /** Header note for options the Any-class budget filter hid. */
 export function budgetHiddenNote(hidden: number, budget?: number): string | null {
   if (hidden <= 0 || budget === undefined) return null;

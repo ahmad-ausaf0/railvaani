@@ -1,7 +1,15 @@
 import cors from 'cors';
 import express from 'express';
 
-import { ProviderError, Quota, TrainClass, TrainDataProvider, clusterCodesFor } from '@railvaani/train-core';
+import {
+  ProviderError,
+  Quota,
+  SearchClass,
+  TrainClass,
+  TrainDataProvider,
+  clusterCodesFor,
+  clusterOf,
+} from '@railvaani/train-core';
 import { findOptions, SplitOption, SplitQuery } from '@railvaani/split-engine';
 
 import { ApiConfig } from './config.js';
@@ -27,6 +35,10 @@ const DAY_TTL_MS = 24 * 60 * 60 * 1000;
 /** Fare disagreement above this many rupees between ConfirmTkt and irctc.dev
  *  gets a server-side warning. The disagreement itself never reaches a caller. */
 const FARE_MISMATCH_RUPEES = 10;
+/** Output caps for /api/search, re-applied after cluster merging so a burst
+ *  of city pairs cannot flood the caller. */
+const SEARCH_MAX_DIRECTS = 20;
+const SEARCH_MAX_SPLITS = 8;
 
 export interface AppDeps {
   /** Inject a provider in tests; production builds the composite provider. */
@@ -118,7 +130,12 @@ export function buildApp(cfg: ApiConfig, deps: AppDeps = {}): express.Express {
       bad.push('from and to must be different stations.');
     }
     if (!isValidDate(date)) bad.push('date must be a YYYY-MM-DD date, today or later.');
-    if (!isTrainClass(clsRaw)) bad.push('cls must be a known train class.');
+    // The web app is class-free: an absent cls and the literal ANY both
+    // mean the Any-class search (each option picks its cheapest bookable
+    // class). Only an unknown non-ANY class is a bad request.
+    if (clsRaw !== '' && clsRaw !== 'ANY' && !isTrainClass(clsRaw)) {
+      bad.push('cls must be a known train class.');
+    }
     if (quotaRaw !== undefined && !isQuota(quotaRaw)) bad.push('quota must be one of GN, TQ, SR, LD, HP.');
     if (budget === null) bad.push('budget must be a positive number of rupees.');
     if (bad.length > 0) {
@@ -127,7 +144,7 @@ export function buildApp(cfg: ApiConfig, deps: AppDeps = {}): express.Express {
     }
     if (!dataGate(res)) return;
 
-    const cls = clsRaw as TrainClass;
+    const cls: SearchClass = clsRaw === '' || clsRaw === 'ANY' ? 'ANY' : (clsRaw as TrainClass);
     const quota = (quotaRaw ?? 'GN') as Quota;
     const key = `search:${from}:${to}:${date}:${cls}:${quota}:${budget ?? 'none'}`;
     const cached = cache.get(key);
@@ -143,8 +160,8 @@ export function buildApp(cfg: ApiConfig, deps: AppDeps = {}): express.Express {
       quota,
       budgetPerHead: budget ?? undefined,
       availabilityMode: 'eager',
-      maxDirects: 20,
-      maxSplits: 8,
+      maxDirects: SEARCH_MAX_DIRECTS,
+      maxSplits: SEARCH_MAX_SPLITS,
       excludeDeparted: true,
     };
     // City clusters (AGENTS.md, DATA CORRECTNESS): a clustered station
@@ -162,12 +179,21 @@ export function buildApp(cfg: ApiConfig, deps: AppDeps = {}): express.Express {
         if (f !== t) pairs.push([f, t]);
       }
     }
+    let hiddenTotal = 0;
+    let partial = false;
     try {
       let options: SplitOption[];
       if (pairs.length === 1) {
         // No cluster involved: the engine's own output, unchanged.
         const only: readonly [string, string] = pairs[0] ?? [from, to];
-        options = await findOptions(provider, { ...query, from: only[0], to: only[1] });
+        const hidden = { count: 0 };
+        options = await findOptions(provider, {
+          ...query,
+          from: only[0],
+          to: only[1],
+          hiddenByBudget: hidden,
+        });
+        hiddenTotal = hidden.count;
       } else {
         const perPair: Array<SplitOption[] | undefined> = new Array(pairs.length);
         let failed = 0;
@@ -179,7 +205,14 @@ export function buildApp(cfg: ApiConfig, deps: AppDeps = {}): express.Express {
             const pair = pairs[i];
             if (!pair) continue;
             try {
-              perPair[i] = await findOptions(provider, { ...query, from: pair[0], to: pair[1] });
+              const hidden = { count: 0 };
+              perPair[i] = await findOptions(provider, {
+                ...query,
+                from: pair[0],
+                to: pair[1],
+                hiddenByBudget: hidden,
+              });
+              hiddenTotal += hidden.count;
             } catch (e) {
               failed += 1;
               lastError = e;
@@ -189,6 +222,7 @@ export function buildApp(cfg: ApiConfig, deps: AppDeps = {}): express.Express {
         };
         await Promise.all(Array.from({ length: Math.min(4, pairs.length) }, () => worker()));
         if (failed === pairs.length) throw lastError;
+        partial = failed > 0;
         // Dedupe by train number + departure time per leg, keeping the first
         // sighting. Directs first, then splits, each group chronological.
         const seen = new Set<string>();
@@ -208,9 +242,24 @@ export function buildApp(cfg: ApiConfig, deps: AppDeps = {}): express.Express {
           (a.legs[0]?.depTime ?? '').localeCompare(b.legs[0]?.depTime ?? '');
         directs.sort(byDep);
         splits.sort(byDep);
-        options = [...directs, ...splits];
+        // The engine caps each pair's own output; the merge does not, so
+        // the same caps are re-applied over the merged, deduped list.
+        options = [...directs.slice(0, SEARCH_MAX_DIRECTS), ...splits.slice(0, SEARCH_MAX_SPLITS)];
       }
-      const body = { options, fetchedAt: new Date().toISOString(), expandedFrom, expandedTo };
+      // City names ride along so the web's header note can say which
+      // city's stations were searched without importing cluster data.
+      const expandedFromCity = expandedFrom.length > 0 ? clusterOf(from)?.city : undefined;
+      const expandedToCity = expandedTo.length > 0 ? clusterOf(to)?.city : undefined;
+      const body = {
+        options,
+        fetchedAt: new Date().toISOString(),
+        expandedFrom,
+        expandedTo,
+        expandedFromCity,
+        expandedToCity,
+        hiddenByBudget: hiddenTotal,
+        partial: partial || undefined,
+      };
       cache.set(key, body, SEARCH_TTL_MS);
       res.json(body);
     } catch (e) {

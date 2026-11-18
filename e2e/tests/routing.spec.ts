@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test';
 
+import { installApiStubs } from './theme-fixtures';
+
 /** Tomorrow's date, so the deep-linked search always lands in the bookable future. */
 function tomorrow(): string {
   return new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
@@ -7,6 +9,7 @@ function tomorrow(): string {
 
 test('submitting a class-free search runs all classes and renders cards', async ({ page }) => {
   test.setTimeout(120_000);
+  await installApiStubs(page);
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto('/', { waitUntil: 'networkidle' });
 
@@ -27,10 +30,13 @@ test('submitting a class-free search runs all classes and renders cards', async 
   await expect(page.locator('rv-option-card').first()).toBeVisible();
   // The summary bar names the all-classes search.
   await expect(page.locator('.rv-card p[role="status"]').first()).toContainText('All classes');
+  // B5: the API's city cluster widens the search; the header says which city.
+  await expect(page.getByText('Searched all Gorakhpur and Delhi stations')).toBeVisible();
 });
 
 test('Back returns to the search form with the fields filled', async ({ page }) => {
   test.setTimeout(120_000);
+  await installApiStubs(page);
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto('/', { waitUntil: 'networkidle' });
 
@@ -48,6 +54,7 @@ test('Back returns to the search form with the fields filled', async ({ page }) 
 
 test('a pasted /results URL loads results on its own', async ({ page }) => {
   test.setTimeout(120_000);
+  await installApiStubs(page);
   await page.setViewportSize({ width: 1280, height: 900 });
   // cls here is deliberate: an old saved link still works, treated as all classes.
   await page.goto(`/results?from=GKP&to=NDLS&date=${tomorrow()}&cls=SL&quota=GN`, {
@@ -56,4 +63,24 @@ test('a pasted /results URL loads results on its own', async ({ page }) => {
 
   await expect(page.locator('h2')).toContainText(/options/, { timeout: 90_000 });
   await expect(page.locator('.rv-stamp').first()).toBeVisible();
+});
+
+test('a rate-limited search shows the 429 message with Retry', async ({ page }) => {
+  await installApiStubs(page, { searchStatus: 429 });
+  await page.goto(`/results?from=GKP&to=NDLS&date=${tomorrow()}&quota=GN`, {
+    waitUntil: 'domcontentloaded',
+  });
+  await expect(page.locator('.rv-error')).toContainText(
+    'Too many searches right now. Wait a few seconds and try again.',
+  );
+  await expect(page.getByRole('button', { name: 'Retry' })).toBeVisible();
+});
+
+test('a partly failed search keeps the partial note', async ({ page }) => {
+  await installApiStubs(page, { partial: true });
+  await page.goto(`/results?from=GKP&to=NDLS&date=${tomorrow()}&quota=GN`, {
+    waitUntil: 'domcontentloaded',
+  });
+  await expect(page.locator('h2')).toContainText(/options/, { timeout: 30_000 });
+  await expect(page.getByText('Some options could not be checked.')).toBeVisible();
 });

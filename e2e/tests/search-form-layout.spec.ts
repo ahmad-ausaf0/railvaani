@@ -1,6 +1,9 @@
 import { expect, test } from '@playwright/test';
 
+import { installApiStubs } from './theme-fixtures';
+
 test('swap button is visible and usable on mobile', async ({ page }) => {
+  await installApiStubs(page);
   await page.goto('/', { waitUntil: 'networkidle' });
   const swap = page.locator('button[aria-label="Swap origin and destination"]');
   await expect(swap).toBeVisible();
