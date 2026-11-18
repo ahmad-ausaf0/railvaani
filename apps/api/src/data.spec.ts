@@ -9,14 +9,16 @@ import { ProviderError } from '@railvaani/train-core';
 import { buildApp } from './app.js';
 import { loadConfig } from './config.js';
 import { istToday } from './validate.js';
+import { IrctcDevClient } from './irctcdev-client.js';
 
 /** Fresh app + ephemeral port per test, so rate windows and caches never leak. */
 async function withApp(
   provider: TrainDataProvider,
   env: Record<string, string> = { CONFIRMTKT_API_KEY: 'test-key' },
   fn: (base: string) => Promise<void>,
+  irctcDev?: IrctcDevClient | null,
 ): Promise<void> {
-  const server = http.createServer(buildApp(loadConfig(env), { provider }));
+  const server = http.createServer(buildApp(loadConfig(env), { provider, irctcDev }));
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   try {
@@ -305,4 +307,142 @@ test('/api/search leaves non-clustered stations untouched', async () => {
     assert.equal(body.options[0].legs[0].from, 'ASR');
     assert.equal(body.options[0].legs[0].to, 'JAT');
   });
+});
+
+function irctcStubCalls() {
+  const calls: string[] = [];
+  const client = {
+    searchTrains: async (from: string, to: string) => {
+      calls.push(`search:${from}:${to}`);
+      return [];
+    },
+    getSchedule: async (trainNo: string) => {
+      calls.push(`schedule:${trainNo}`);
+      return {
+        trainNo,
+        trainName: 'Test Express',
+        runningDays: ['Mon', 'Wed'],
+        originCode: 'GKP',
+        destinationCode: 'NDLS',
+        stops: [
+          { seq: 1, code: 'GKP', name: 'Gorakhpur Junction', arr: null, dep: '20:05', day: 0, haltMins: 0, distanceKm: 0 },
+          { seq: 2, code: 'LKO', name: 'Lucknow', arr: '23:55', dep: '00:05', day: 0, haltMins: 10, distanceKm: 270 },
+          { seq: 3, code: 'NDLS', name: 'New Delhi', arr: '08:30', dep: null, day: 1, haltMins: 0, distanceKm: 780 },
+        ],
+      };
+    },
+    getFare: async (trainNo: string, from: string, to: string) => {
+      calls.push(`fare:${trainNo}:${from}:${to}`);
+      return { SL: 505, '2A': 1500, '3A': 1250, EC: 2500 };
+    },
+  };
+  return { calls, client: client as unknown as IrctcDevClient };
+}
+
+test('/api/schedule serves the irctc.dev schedule and caches it for a day', async () => {
+  const { provider } = stubProvider();
+  const { calls, client } = irctcStubCalls();
+  await withApp(provider, undefined, async (base) => {
+    const res = await fetch(`${base}/api/schedule?trainNo=12565`);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.trainNo, '12565');
+    assert.equal(body.trainName, 'Test Express');
+    assert.deepEqual(body.runningDays, ['Mon', 'Wed']);
+    assert.equal(body.originCode, 'GKP');
+    assert.equal(body.destinationCode, 'NDLS');
+    assert.equal(body.stops.length, 3);
+    assert.equal(body.stops[1].code, 'LKO');
+    assert.equal(body.stops[1].haltMins, 10);
+    assert.equal(body.stops[2].arr, '08:30');
+    assert.equal(body.stops[2].day, 1);
+    assert.ok(/^\d{4}-\d{2}-\d{2}T/.test(body.fetchedAt));
+    assert.deepEqual(calls, ['schedule:12565']);
+    // Second request is a cache hit: one upstream call, same fetchedAt.
+    const res2 = await fetch(`${base}/api/schedule?trainNo=12565`);
+    assert.equal(res2.status, 200);
+    const body2 = await res2.json();
+    assert.equal(calls.length, 1);
+    assert.equal(body2.fetchedAt, body.fetchedAt);
+    // A bad train number is rejected before anything is called.
+    const bad = await fetch(`${base}/api/schedule?trainNo=abc`);
+    assert.equal(bad.status, 400);
+    assert.equal(calls.length, 1);
+  }, client);
+});
+
+test('/api/schedule without IRCTC_DEV_API_KEY returns not_configured and calls nothing', async () => {
+  const { provider } = stubProvider();
+  const { calls, client } = irctcStubCalls();
+  await withApp(provider, { CONFIRMTKT_API_KEY: 'test-key' }, async (base) => {
+    const res = await fetch(`${base}/api/schedule?trainNo=12565`);
+    assert.equal(res.status, 503);
+    const body = await res.json();
+    assert.equal(body.error.code, 'not_configured');
+    assert.deepEqual(calls, []);
+  }, null);
+});
+
+test('/api/fare-table prefers ConfirmTkt, fills gaps from irctc.dev, warns past 10 rupees', async () => {
+  const { provider } = stubProvider();
+  const { calls, client } = irctcStubCalls();
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (msg: unknown) => {
+    warnings.push(String(msg));
+  };
+  try {
+    await withApp(provider, undefined, async (base) => {
+      const res = await fetch(`${base}/api/fare-table?trainNo=12565&from=GKP&to=NDLS`);
+      assert.equal(res.status, 200);
+      const body = await res.json();
+      // ConfirmTkt stub answers { SL: 555 }: it wins, irctc.dev fills 2A/3A.
+      assert.equal(body.fares.SL, 555);
+      assert.equal(body.fares['2A'], 1500);
+      assert.equal(body.fares['3A'], 1250);
+      // 'EC' is not a TrainClass in this app and never reaches the response.
+      assert.equal(body.fares.EC, undefined);
+      assert.ok(/^\d{4}-\d{2}-\d{2}T/.test(body.fetchedAt));
+      // 555 vs 505 is 50 rupees apart: exactly one server-side warning.
+      assert.equal(warnings.length, 1);
+      assert.ok(warnings[0].includes('555') && warnings[0].includes('505'));
+      assert.equal(Object.keys(body.fares).length, 3);
+      assert.deepEqual(calls, ['fare:12565:GKP:NDLS']);
+    }, client);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test('/api/fare-table without IRCTC_DEV_API_KEY serves ConfirmTkt only', async () => {
+  const { provider } = stubProvider();
+  const { calls, client } = irctcStubCalls();
+  await withApp(provider, { CONFIRMTKT_API_KEY: 'test-key' }, async (base) => {
+    const res = await fetch(`${base}/api/fare-table?trainNo=12565&from=GKP&to=NDLS`);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.deepEqual(body.fares, { SL: 555 });
+    assert.deepEqual(calls, []);
+  }, null);
+});
+
+test('/api/availability never touches the irctc.dev client', async () => {
+  const { provider } = stubProvider();
+  const { calls, client } = irctcStubCalls();
+  await withApp(provider, undefined, async (base) => {
+    const res = await fetch(`${base}/api/availability?trainNo=12565&date=${TOMORROW}`);
+    assert.equal(res.status, 200);
+    assert.deepEqual(calls, []);
+  }, client);
+});
+
+test('the irctc.dev client exposes no availability method, structurally', () => {
+  const proto = Object.getOwnPropertyNames(IrctcDevClient.prototype);
+  assert.ok(
+    proto.every((n) => !/avail/i.test(n)),
+    `availability leaked into the irctc.dev client: ${proto.join(', ')}`,
+  );
+  const client = new IrctcDevClient({ apiKey: 'unused' });
+  const own = Object.getOwnPropertyNames(client);
+  assert.ok(own.every((n) => !/avail/i.test(n)), `availability on the instance: ${own.join(', ')}`);
 });

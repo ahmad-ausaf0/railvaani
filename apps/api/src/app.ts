@@ -5,6 +5,7 @@ import { ProviderError, Quota, TrainClass, TrainDataProvider, clusterCodesFor } 
 import { findOptions, SplitOption, SplitQuery } from '@railvaani/split-engine';
 
 import { ApiConfig } from './config.js';
+import { IrctcDevClient } from './irctcdev-client.js';
 import { Cache } from './cache.js';
 import { ERROR_MESSAGES, sendError } from './errors.js';
 import { rateLimiter } from './rate-limit.js';
@@ -23,10 +24,16 @@ import {
 const SEARCH_TTL_MS = 60_000;
 const AVAILABILITY_TTL_MS = 120_000;
 const DAY_TTL_MS = 24 * 60 * 60 * 1000;
+/** Fare disagreement above this many rupees between ConfirmTkt and irctc.dev
+ *  gets a server-side warning. The disagreement itself never reaches a caller. */
+const FARE_MISMATCH_RUPEES = 10;
 
 export interface AppDeps {
   /** Inject a provider in tests; production builds the composite provider. */
   provider?: TrainDataProvider;
+  /** Inject an irctc.dev client in tests (null = none). Production builds
+   *  one when IRCTC_DEV_API_KEY is set, and nothing otherwise. */
+  irctcDev?: IrctcDevClient | null;
 }
 
 /** Build the Express app: CORS allowlist, rate limiting, the one error shape,
@@ -53,6 +60,10 @@ export function buildApp(cfg: ApiConfig, deps: AppDeps = {}): express.Express {
   // app uses today. Tests inject their own provider here.
   const provider = deps.provider ?? buildProvider(cfg);
   const cache = new Cache<unknown>();
+  // irctc.dev: schedules and fares only. Its availability is segment-blind
+  // and is never read here; the client exposes no availability method.
+  const irctcDev =
+    deps.irctcDev ?? (cfg.irctcDevApiKey ? new IrctcDevClient({ apiKey: cfg.irctcDevApiKey }) : null);
 
   /** One query string value, only when it arrived as a plain string. */
   const q = (req: express.Request, name: string): string | undefined => {
@@ -261,7 +272,32 @@ export function buildApp(cfg: ApiConfig, deps: AppDeps = {}): express.Express {
         sendError(res, 502, 'upstream_down', ERROR_MESSAGES.upstream_down);
         return;
       }
-      const fares = provider.getFareTable(trainNo, from, to);
+      const ctFares = provider.getFareTable(trainNo, from, to);
+      const fares: Record<string, number> = {};
+      for (const [cls, fare] of Object.entries(ctFares)) {
+        if (fare !== undefined) fares[cls] = fare;
+      }
+      // irctc.dev is the secondary fare source: ConfirmTkt wins where both
+      // list the class, irctc.dev fills the gaps, and a disagreement above
+      // FARE_MISMATCH_RUPEES is logged server-side only. The response keeps
+      // exactly one fare per class.
+      if (irctcDev) {
+        try {
+          const devFares = await irctcDev.getFare(trainNo, from, to);
+          for (const [cls, devFare] of Object.entries(devFares)) {
+            if (!isTrainClass(cls)) continue;
+            const ctFare = ctFares[cls];
+            if (ctFare !== undefined && Math.abs(ctFare - devFare) > FARE_MISMATCH_RUPEES) {
+              console.warn(
+                `fare disagreement ${trainNo} ${from}-${to} ${cls}: confirmtkt ${ctFare} vs irctc.dev ${devFare}`,
+              );
+            }
+            if (fares[cls] === undefined) fares[cls] = devFare;
+          }
+        } catch {
+          // A failed secondary source must never break the fare table.
+        }
+      }
       const body = { fares, fetchedAt: new Date().toISOString() };
       cache.set(key, body, DAY_TTL_MS);
       res.json(body);
@@ -292,6 +328,36 @@ export function buildApp(cfg: ApiConfig, deps: AppDeps = {}): express.Express {
       res.json(body);
     } catch (e) {
       mapUpstreamError(e, res, `route ${trainNo}`);
+    }
+  });
+
+  // Full schedule, halts and timings for one train, from irctc.dev, whose
+  // schedules were accurate in the spike. Its availability is segment-blind
+  // and is never read here; this endpoint carries no seat data at all.
+  app.get('/api/schedule', async (req, res) => {
+    const trainNo = q(req, 'trainNo') ?? '';
+    if (!isTrainNo(trainNo)) {
+      sendError(res, 400, 'bad_request', 'trainNo must be a train number.');
+      return;
+    }
+    if (!irctcDev) {
+      sendError(res, 503, 'not_configured', ERROR_MESSAGES.not_configured);
+      return;
+    }
+
+    const key = `schedule:${trainNo}`;
+    const cached = cache.get(key);
+    if (cached) {
+      res.json(cached);
+      return;
+    }
+    try {
+      const schedule = await irctcDev.getSchedule(trainNo);
+      const body = { ...schedule, fetchedAt: new Date().toISOString() };
+      cache.set(key, body, DAY_TTL_MS);
+      res.json(body);
+    } catch (e) {
+      mapUpstreamError(e, res, `schedule ${trainNo}`);
     }
   });
 
