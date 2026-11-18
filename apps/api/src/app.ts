@@ -1,8 +1,8 @@
 import cors from 'cors';
 import express from 'express';
 
-import { ProviderError, Quota, TrainClass, TrainDataProvider } from '@railvaani/train-core';
-import { findOptions, SplitQuery } from '@railvaani/split-engine';
+import { ProviderError, Quota, TrainClass, TrainDataProvider, clusterCodesFor } from '@railvaani/train-core';
+import { findOptions, SplitOption, SplitQuery } from '@railvaani/split-engine';
 
 import { ApiConfig } from './config.js';
 import { Cache } from './cache.js';
@@ -136,9 +136,70 @@ export function buildApp(cfg: ApiConfig, deps: AppDeps = {}): express.Express {
       maxSplits: 8,
       excludeDeparted: true,
     };
+    // City clusters (AGENTS.md, DATA CORRECTNESS): a clustered station
+    // expands to every station serving its city, on both ends. Each pair is
+    // searched independently (at most 4 in parallel; one failing pair never
+    // kills the rest), results merge and dedupe by train number + departure
+    // time, and every option keeps its ACTUAL boarding/alighting stations.
+    const fromCodes = clusterCodesFor(from);
+    const toCodes = clusterCodesFor(to);
+    const expandedFrom = fromCodes.length > 1 ? [...fromCodes] : [];
+    const expandedTo = toCodes.length > 1 ? [...toCodes] : [];
+    const pairs: Array<readonly [string, string]> = [];
+    for (const f of fromCodes) {
+      for (const t of toCodes) {
+        if (f !== t) pairs.push([f, t]);
+      }
+    }
     try {
-      const options = await findOptions(provider, query);
-      const body = { options, fetchedAt: new Date().toISOString() };
+      let options: SplitOption[];
+      if (pairs.length === 1) {
+        // No cluster involved: the engine's own output, unchanged.
+        const only: readonly [string, string] = pairs[0] ?? [from, to];
+        options = await findOptions(provider, { ...query, from: only[0], to: only[1] });
+      } else {
+        const perPair: Array<SplitOption[] | undefined> = new Array(pairs.length);
+        let failed = 0;
+        let lastError: unknown;
+        let next = 0;
+        const worker = async (): Promise<void> => {
+          while (next < pairs.length) {
+            const i = next++;
+            const pair = pairs[i];
+            if (!pair) continue;
+            try {
+              perPair[i] = await findOptions(provider, { ...query, from: pair[0], to: pair[1] });
+            } catch (e) {
+              failed += 1;
+              lastError = e;
+              perPair[i] = [];
+            }
+          }
+        };
+        await Promise.all(Array.from({ length: Math.min(4, pairs.length) }, () => worker()));
+        if (failed === pairs.length) throw lastError;
+        // Dedupe by train number + departure time per leg, keeping the first
+        // sighting. Directs first, then splits, each group chronological.
+        const seen = new Set<string>();
+        const directs: SplitOption[] = [];
+        const splits: SplitOption[] = [];
+        for (const group of perPair) {
+          for (const option of group ?? []) {
+            const legKey = option.legs
+              .map((l) => `${l.trainNumber}@${l.from}:${l.depTime}`)
+              .join('|');
+            if (seen.has(legKey)) continue;
+            seen.add(legKey);
+            (option.type === 'direct' ? directs : splits).push(option);
+          }
+        }
+        const byDep = (a: SplitOption, b: SplitOption): number =>
+          (a.legs[0]?.depTime ?? '').localeCompare(b.legs[0]?.depTime ?? '');
+        directs.sort(byDep);
+        splits.sort(byDep);
+        options = [...directs, ...splits];
+      }
+      const body = { options, fetchedAt: new Date().toISOString(), expandedFrom, expandedTo };
       cache.set(key, body, SEARCH_TTL_MS);
       res.json(body);
     } catch (e) {

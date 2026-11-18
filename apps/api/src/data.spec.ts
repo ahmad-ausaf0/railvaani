@@ -225,3 +225,84 @@ test('with no CONFIRMTKT_API_KEY the data endpoints answer not_configured and he
     assert.deepEqual(await health.json(), { ok: true, service: 'railvaani-api' });
   });
 });
+
+function makeTrainOn(number: string, from: string, to: string, dep: string): Train {
+  return { ...makeTrain(number), from, to, depTime: dep };
+}
+
+test('/api/search expands clustered stations on both ends and keeps actual codes', async () => {
+  // The real upstream is city-loose: a GKP -> NDLS search already returns
+  // DLI arrivals, and searching (GKP, DLI) returns the same train, so the
+  // merge must dedupe by train number + departure time.
+  const gkpToDli = makeTrainOn('12541', 'GKP', 'DLI', '15:35');
+  const legTrains: Record<string, Train[]> = {
+    'GKP:NDLS': [gkpToDli, makeTrainOn('12565', 'GKP', 'NDLS', '20:05')],
+    'GKP:DLI': [gkpToDli],
+    'GKP:ANVT': [makeTrainOn('15707', 'GKP', 'ANVT', '16:20')],
+    'GKC:NDLS': [makeTrainOn('05071', 'GKC', 'NDLS', '04:10')],
+  };
+  const searched: string[] = [];
+  const { provider } = stubProvider({
+    searchTrains: async (from: string, to: string) => {
+      searched.push(`${from}:${to}`);
+      return legTrains[`${from}:${to}`] ?? [];
+    },
+  });
+  await withApp(provider, undefined, async (base) => {
+    const res = await fetch(`${base}/api/search?from=GKP&to=NDLS&date=${TOMORROW}&cls=SL`);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.deepEqual(body.expandedFrom, ['GKP', 'GKC']);
+    assert.deepEqual(body.expandedTo, ['NDLS', 'DLI', 'ANVT', 'NZM', 'SSB']);
+    for (const f of ['GKP', 'GKC']) {
+      for (const t of ['NDLS', 'DLI', 'ANVT', 'NZM', 'SSB']) {
+        assert.ok(searched.includes(`${f}:${t}`), `pair ${f}:${t} was not searched`);
+      }
+    }
+    const last = <O extends { legs: Array<{ to: string }> }>(o: O) => o.legs[o.legs.length - 1].to;
+    const destinations = body.options.map(last);
+    assert.ok(destinations.includes('DLI'), 'no DLI arrival');
+    assert.ok(destinations.includes('ANVT'), 'no ANVT arrival');
+    assert.ok(destinations.includes('NDLS'), 'no NDLS arrival');
+    // The duplicated 12541 appears once, not twice.
+    assert.equal(
+      body.options.filter(
+        (o: { legs: Array<{ trainNumber: string }> }) => o.legs[0].trainNumber === '12541',
+      ).length,
+      1,
+    );
+    // Actual boarding stations survive: 05071 boards at GKC, not relabeled.
+    assert.ok(
+      body.options.some((o: { legs: Array<{ from: string }> }) => o.legs[0].from === 'GKC'),
+      'GKC boarding lost',
+    );
+    // Directs come back chronological.
+    const deps = body.options.map((o: { legs: Array<{ depTime: string }> }) => o.legs[0].depTime);
+    assert.deepEqual(deps, [...deps].sort());
+  });
+});
+
+test('/api/search leaves non-clustered stations untouched', async () => {
+  const searched: string[] = [];
+  const { provider } = stubProvider({
+    searchTrains: async (from: string, to: string) => {
+      searched.push(`${from}:${to}`);
+      return [makeTrainOn('12926', 'ASR', 'JAT', '07:45')];
+    },
+  });
+  await withApp(provider, undefined, async (base) => {
+    const res = await fetch(`${base}/api/search?from=ASR&to=JAT&date=${TOMORROW}&cls=SL`);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.deepEqual(body.expandedFrom, []);
+    assert.deepEqual(body.expandedTo, []);
+    assert.ok(searched.length >= 1, 'the search never reached the provider');
+    assert.ok(
+      searched.every((k) => k === 'ASR:JAT'),
+      `unexpected extra searches: ${searched.join(', ')}`,
+    );
+    assert.equal(body.options.length, 1);
+    assert.equal(body.options[0].legs[0].from, 'ASR');
+    assert.equal(body.options[0].legs[0].to, 'JAT');
+  });
+});
