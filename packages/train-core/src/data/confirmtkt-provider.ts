@@ -29,6 +29,10 @@ import { ProviderError, TrainDataProvider } from './train-data-provider';
 
 export interface ConfirmTktConfig {
   baseUrl?: string;
+  /** API key sent as the apikey header. Default: ConfirmTkt's public
+   *  web-bundle key, the same constant its own site sends (a client
+   *  identifier, not a per-user secret). Servers should pass their own. */
+  apiKey?: string;
   /** Minimum gap between upstream calls. Default 150ms. */
   minIntervalMs?: number;
   /** Max concurrent upstream fetches. */
@@ -162,6 +166,7 @@ export class ConfirmTktProvider implements TrainDataProvider {
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => number;
   private readonly fallback: TrainDataProvider;
+  private readonly apiKey: string;
 
   private readonly cache = new Map<string, { value: unknown; expiresAt: number }>();
   /** trainNo -> legKey (FROM|TO|DATE) -> cached classes for that leg. */
@@ -172,6 +177,7 @@ export class ConfirmTktProvider implements TrainDataProvider {
 
   constructor(fallback: TrainDataProvider, config: ConfirmTktConfig = {}) {
     this.fallback = fallback;
+    this.apiKey = config.apiKey ?? 'ct-web!2$';
     this.base = (config.baseUrl ?? 'https://cttrainsapi.confirmtkt.com').replace(/\/$/, '');
     this.minIntervalMs = config.minIntervalMs ?? 150;
     this.maxConcurrency = config.maxConcurrency ?? 4;
@@ -188,7 +194,7 @@ export class ConfirmTktProvider implements TrainDataProvider {
     return {
       Accept: 'application/json',
       clientid: 'ct-web',
-      apikey: 'ct-web!2$',
+      apikey: this.apiKey,
       deviceid: 'railvaani-0000-0000-0000-000000000000',
     };
   }

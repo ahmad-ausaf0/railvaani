@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/main.ts",
     "build": "tsc -p tsconfig.json",
-    "test": "npm run build && tsx --test src/cache.spec.ts src/api.spec.ts src/boot.spec.ts",
+    "test": "npm run build && tsx --test src/cache.spec.ts src/api.spec.ts src/boot.spec.ts src/data.spec.ts",
     "start": "node --import ./boot/register.mjs dist/main.js"
   },
   "dependencies": {
